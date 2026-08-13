@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ViTrox Marketing Agent</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <section id="login-view" class="view">
+    <form id="login-form" class="login-card">
+      <h1>ViTrox Marketing Agent</h1>
+      <p class="subtitle">Enter the shared team password to continue.</p>
+      <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required />
+      <button type="submit">Log in</button>
+      <p id="login-error" class="error-text" hidden></p>
+    </form>
+  </section>
+
+  <section id="chat-view" class="view" hidden>
+    <header class="chat-header">
+      <h1>ViTrox Marketing Agent</h1>
+      <button id="new-conversation-btn" class="ghost-btn">New Conversation</button>
+    </header>
+
+    <div id="quick-actions" class="quick-actions"></div>
+
+    <main id="message-list" class="message-list"></main>
+
+    <form id="chat-form" class="chat-input-row">
+      <textarea id="chat-input" placeholder="Ask the ViTrox Marketing Agent..." rows="2" required></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
