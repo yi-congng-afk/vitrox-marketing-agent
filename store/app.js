@@ -157,8 +157,18 @@ function readImageAsCompressedDataUrl(file, maxDim = 900, quality = 0.72) {
 }
 
 async function loadItems() {
-  const res = await fetch(API.items);
-  const data = await res.json();
+  let res, data;
+  try {
+    res = await fetch(API.items);
+    data = await res.json();
+  } catch {
+    showToast('Could not reach the store server. Check your connection and reload.', 'error');
+    return;
+  }
+  if (!res.ok) {
+    showToast(`Failed to load items: ${data.error || res.status}`, 'error');
+    return;
+  }
   items = data.items || [];
   categories = data.categories || [];
   renderCategoryChips();
