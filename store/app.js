@@ -33,7 +33,9 @@ function showToast(message, type = '') {
 }
 
 function openModal(id) {
-  el(id).hidden = false;
+  document.querySelectorAll('.modal-overlay').forEach((overlay) => {
+    overlay.hidden = overlay.id !== id;
+  });
 }
 function closeModal(id) {
   el(id).hidden = true;
