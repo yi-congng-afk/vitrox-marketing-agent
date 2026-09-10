@@ -1,0 +1,9 @@
+{
+  "name": "vitrox-agent",
+  "private": true,
+  "version": "1.0.0",
+  "description": "ViTrox College Marketing Agent + Store Room Dashboard",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ViTrox College Store Room</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <h1>🏬 Store Room Dashboard</h1>
+      <a href="/" class="ghost-btn">← Marketing Agent</a>
+    </div>
+    <div class="topbar-right">
+      <button id="reports-btn" class="icon-btn" type="button">
+        🔔 Alerts <span id="reports-badge" class="badge" hidden>0</span>
+      </button>
+      <button id="admin-btn" class="ghost-btn" type="button">🔒 Admin</button>
+    </div>
+  </header>
+
+  <div id="low-stock-banner" class="banner" hidden></div>
+
+  <div class="toolbar">
+    <input id="search-input" type="search" placeholder="Search items..." />
+    <div id="category-filters" class="chip-row"></div>
+  </div>
+
+  <div class="toolbar toolbar-actions">
+    <button id="add-item-btn" class="primary-btn" type="button">+ Add New Item</button>
+    <button id="remove-item-btn" class="ghost-btn" type="button">🗑 Remove Item</button>
+    <button id="export-items-btn" class="ghost-btn" type="button">⬇ Export Inventory (CSV)</button>
+    <button id="export-txns-btn" class="ghost-btn" type="button">⬇ Export Log (CSV)</button>
+  </div>
+
+  <main id="item-grid" class="item-grid"></main>
+  <p id="empty-state" class="empty-state" hidden>No items match your search/filter.</p>
+
+  <!-- Item detail modal -->
+  <div id="detail-modal" class="modal-overlay" hidden>
+    <div class="modal detail-modal">
+      <button class="modal-close" data-close>✕</button>
+      <div class="detail-grid">
+        <div class="detail-media">
+          <div class="media-block">
+            <span class="media-label">Item Photo</span>
+            <img id="detail-item-image" class="media-img" alt="" />
+          </div>
+          <div class="media-block">
+            <span class="media-label">Location Photo</span>
+            <img id="detail-location-image" class="media-img" alt="" />
+          </div>
+        </div>
+        <div class="detail-info">
+          <span id="detail-category" class="tag"></span>
+          <h2 id="detail-name"></h2>
+          <p class="detail-location-text">📍 <span id="detail-location-text"></span></p>
+          <p class="detail-qty">Current quantity: <strong id="detail-qty"></strong> <span id="detail-unit"></span></p>
+          <p id="detail-low-stock" class="low-stock-tag" hidden>⚠ Low stock</p>
+          <p id="detail-notes" class="detail-notes"></p>
+
+          <div class="detail-actions">
+            <button id="detail-addon-btn" class="primary-btn" type="button">+ Add On</button>
+            <button id="detail-moveout-btn" class="danger-btn" type="button">− Move Out</button>
+            <button id="detail-report-btn" class="ghost-btn" type="button">🚩 Report Issue</button>
+            <button id="detail-edit-btn" class="ghost-btn admin-only" type="button" hidden>✎ Edit</button>
+            <button id="detail-delete-btn" class="ghost-btn admin-only" type="button" hidden>🗑 Delete</button>
+          </div>
+
+          <h3>Recent Activity</h3>
+          <table class="history-table">
+            <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>By</th><th>Remarks</th></tr></thead>
+            <tbody id="detail-history-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit item modal -->
+  <div id="item-form-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2 id="item-form-title">Add New Item</h2>
+      <form id="item-form">
+        <label>Item name <input id="form-name" type="text" required /></label>
+        <label>Category
+          <select id="form-category" required></select>
+        </label>
+        <label>Unit <input id="form-unit" type="text" placeholder="pcs" value="pcs" /></label>
+        <div class="form-row">
+          <label>Current quantity <input id="form-quantity" type="number" min="0" step="1" value="0" required /></label>
+          <label>Low-stock alert threshold <input id="form-threshold" type="number" min="0" step="1" value="5" required /></label>
+        </div>
+        <label>Location (text, e.g. "Store Room A, Shelf 3") <input id="form-location-text" type="text" /></label>
+        <label>Item photo <input id="form-item-image" type="file" accept="image/*" /></label>
+        <img id="form-item-image-preview" class="upload-preview" hidden />
+        <label>Location photo <input id="form-location-image" type="file" accept="image/*" /></label>
+        <img id="form-location-image-preview" class="upload-preview" hidden />
+        <label>Notes <textarea id="form-notes" rows="2"></textarea></label>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Save</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+        <p id="item-form-error" class="error-text" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add-on / Move-out modal -->
+  <div id="txn-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2 id="txn-modal-title">Add On Stock</h2>
+      <p id="txn-modal-item"></p>
+      <form id="txn-form">
+        <label>Your name <input id="txn-name" type="text" required /></label>
+        <label>Employee number <input id="txn-employee-no" type="text" required /></label>
+        <label>Quantity <input id="txn-quantity" type="number" min="1" step="1" required /></label>
+        <label id="txn-remarks-label">Remarks / purpose <textarea id="txn-remarks" rows="2"></textarea></label>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Submit</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+        <p id="txn-form-error" class="error-text" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Report issue modal -->
+  <div id="report-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>Report an Issue</h2>
+      <p id="report-modal-item"></p>
+      <form id="report-form">
+        <label>Type
+          <select id="report-type">
+            <option value="damage">Damaged item</option>
+            <option value="restock">Request restock</option>
+          </select>
+        </label>
+        <label>Your name <input id="report-name" type="text" required /></label>
+        <label>Employee number <input id="report-employee-no" type="text" required /></label>
+        <label>Quantity affected (optional) <input id="report-quantity" type="number" min="0" step="1" /></label>
+        <label>Description <textarea id="report-message" rows="3" required></textarea></label>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Submit Report</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+        <p id="report-form-error" class="error-text" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Reports panel modal -->
+  <div id="reports-panel-modal" class="modal-overlay" hidden>
+    <div class="modal reports-modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>Alerts &amp; Reports</h2>
+      <div id="low-stock-list-panel"></div>
+      <h3>Open Reports</h3>
+      <div id="reports-list"></div>
+    </div>
+  </div>
+
+  <!-- Admin unlock modal -->
+  <div id="admin-modal" class="modal-overlay" hidden>
+    <div class="modal admin-modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>Admin Access</h2>
+      <p class="subtitle">Enter the admin password to add, edit, or remove catalog items and resolve reports.</p>
+      <form id="admin-form">
+        <input id="admin-password-input" type="password" placeholder="Admin password" required />
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Unlock</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+        <p id="admin-form-error" class="error-text" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Remove item picker modal -->
+  <div id="remove-picker-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>Remove an Item</h2>
+      <p class="subtitle">This permanently deletes the item and its details from the catalog. Admin only.</p>
+      <select id="remove-picker-select"></select>
+      <div class="form-actions">
+        <button id="remove-picker-confirm" class="danger-btn" type="button">Delete Item</button>
+        <button type="button" class="ghost-btn" data-close>Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
