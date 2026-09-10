@@ -56,14 +56,23 @@ const SEED_ITEMS = [
   updatedAt: new Date(0).toISOString(),
 }));
 
+// Netlify's zero-config getStore(name) relies on deploy-context auto-detection,
+// which isn't available on every site/plan (MissingBlobsEnvironmentError). If
+// NETLIFY_BLOBS_SITE_ID / NETLIFY_BLOBS_TOKEN are set, connect explicitly instead.
+function storeConfig(name) {
+  const siteID = process.env.NETLIFY_BLOBS_SITE_ID;
+  const token = process.env.NETLIFY_BLOBS_TOKEN;
+  return siteID && token ? { name, siteID, token } : name;
+}
+
 function itemsStore() {
-  return getStore('vitrox-store-items');
+  return getStore(storeConfig('vitrox-store-items'));
 }
 function transactionsStore() {
-  return getStore('vitrox-store-transactions');
+  return getStore(storeConfig('vitrox-store-transactions'));
 }
 function reportsStore() {
-  return getStore('vitrox-store-reports');
+  return getStore(storeConfig('vitrox-store-reports'));
 }
 
 async function getItems() {
