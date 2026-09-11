@@ -1,5 +1,6 @@
 const { requireAdmin } = require('./_shared/store-auth');
 const { getItems, getReports, saveReports, genId } = require('./_shared/store-blobs');
+const { sendAlertEmail } = require('./_shared/mailer');
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
@@ -56,6 +57,14 @@ exports.handler = async (event) => {
     const reports = await getReports();
     reports.push(report);
     await saveReports(reports);
+
+    await sendAlertEmail(
+      `[ViTrox Store] ${type === 'damage' ? 'Damage report' : 'Restock request'}: ${item.name}`,
+      `${type === 'damage' ? 'Damage reported' : 'Restock requested'} for "${item.name}".\n\n` +
+        `By: ${report.name} (${report.employeeNo})\n` +
+        (report.quantity !== null ? `Quantity affected: ${report.quantity}\n` : '') +
+        `Message: ${report.message}\nWhen: ${report.createdAt}`
+    );
 
     return { statusCode: 201, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report }) };
   }
