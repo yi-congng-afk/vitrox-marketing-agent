@@ -320,15 +320,99 @@ async function loadHistory(itemId) {
   const data = await res.json();
   const body = el('detail-history-body');
   body.innerHTML = '';
-  (data.transactions || []).slice(0, 10).forEach((t) => {
+  const list = data.transactions || [];
+
+  list.slice(0, 10).forEach((t) => {
     const row = document.createElement('tr');
     const date = new Date(t.timestamp).toLocaleString();
     row.innerHTML = `<td>${date}</td><td>${t.type === 'add' ? '+ Add On' : '− Move Out'}</td><td>${t.quantity}</td><td>${escapeHtml(t.name)} (${escapeHtml(t.employeeNo)})</td><td>${escapeHtml(t.remarks || '')}</td>`;
+
+    const actionsCell = document.createElement('td');
+    if (isAdminUnlocked()) {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'ghost-btn';
+      editBtn.textContent = '✎';
+      editBtn.title = 'Edit this record';
+      editBtn.type = 'button';
+      editBtn.addEventListener('click', () => openEditTxnModal(t));
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'ghost-btn';
+      deleteBtn.textContent = '🗑';
+      deleteBtn.title = 'Delete this record';
+      deleteBtn.type = 'button';
+      deleteBtn.addEventListener('click', () => deleteTxn(t));
+
+      actionsCell.appendChild(editBtn);
+      actionsCell.appendChild(deleteBtn);
+    }
+    row.appendChild(actionsCell);
     body.appendChild(row);
   });
-  if ((data.transactions || []).length === 0) {
-    body.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted)">No activity yet.</td></tr>';
+
+  if (list.length === 0) {
+    body.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted)">No activity yet.</td></tr>';
   }
+}
+
+let editingTxnId = null;
+
+function openEditTxnModal(t) {
+  editingTxnId = t.id;
+  el('edit-txn-type').value = t.type;
+  el('edit-txn-quantity').value = t.quantity;
+  el('edit-txn-name').value = t.name;
+  el('edit-txn-employee-no').value = t.employeeNo;
+  el('edit-txn-remarks').value = t.remarks || '';
+  el('edit-txn-form-error').hidden = true;
+  openModal('edit-txn-modal');
+}
+
+el('edit-txn-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    type: el('edit-txn-type').value,
+    quantity: Number(el('edit-txn-quantity').value),
+    name: el('edit-txn-name').value,
+    employeeNo: el('edit-txn-employee-no').value,
+    remarks: el('edit-txn-remarks').value,
+  };
+
+  const res = await adminFetch(`${API.txns}?id=${encodeURIComponent(editingTxnId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res) return;
+  const data = await res.json();
+
+  if (!res.ok) {
+    el('edit-txn-form-error').textContent = data.error || 'Something went wrong.';
+    el('edit-txn-form-error').hidden = false;
+    return;
+  }
+
+  closeModal('edit-txn-modal');
+  showToast('Activity record updated.', 'success');
+  await loadItems();
+  openDetail(selectedItemId);
+});
+
+async function deleteTxn(t) {
+  if (!confirm('Delete this activity record? This will also adjust the item’s current quantity to compensate.')) return;
+
+  const res = await adminFetch(`${API.txns}?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+  if (!res) return;
+  const data = await res.json();
+
+  if (!res.ok) {
+    showToast(data.error || 'Failed to delete record.', 'error');
+    return;
+  }
+
+  showToast('Activity record deleted.', 'success');
+  await loadItems();
+  openDetail(selectedItemId);
 }
 
 function escapeHtml(str) {

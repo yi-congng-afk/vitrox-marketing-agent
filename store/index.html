@@ -71,7 +71,7 @@
 
           <h3>Recent Activity</h3>
           <table class="history-table">
-            <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>By</th><th>Remarks</th></tr></thead>
+            <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>By</th><th>Remarks</th><th></th></tr></thead>
             <tbody id="detail-history-body"></tbody>
           </table>
         </div>
@@ -125,6 +125,32 @@
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
         <p id="txn-form-error" class="error-text" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit transaction modal (admin only) -->
+  <div id="edit-txn-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>Edit Activity Record</h2>
+      <p class="subtitle">Editing this will recalculate the item's current quantity to match. Admin only.</p>
+      <form id="edit-txn-form">
+        <label>Type
+          <select id="edit-txn-type">
+            <option value="add">Add On</option>
+            <option value="remove">Move Out</option>
+          </select>
+        </label>
+        <label>Quantity <input id="edit-txn-quantity" type="number" min="1" step="1" required /></label>
+        <label>Name <input id="edit-txn-name" type="text" required /></label>
+        <label>Employee number <input id="edit-txn-employee-no" type="text" required /></label>
+        <label>Remarks <textarea id="edit-txn-remarks" rows="2"></textarea></label>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Save</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+        <p id="edit-txn-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
