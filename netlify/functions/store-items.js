@@ -16,6 +16,9 @@ function sanitizeItem(input, existing) {
   if (input.locationImage !== undefined) item.locationImage = input.locationImage || null;
   if (typeof input.locationText === 'string') item.locationText = input.locationText.trim();
   if (typeof input.notes === 'string') item.notes = input.notes.trim();
+  if (typeof input.returnable === 'boolean') item.returnable = input.returnable;
+  // quantityOnLoan is intentionally never accepted from the client — it's only
+  // ever changed by store-loans.js as loans are opened/returned.
   return item;
 }
 
@@ -56,6 +59,8 @@ exports.handler = async (event) => {
       unit: 'pcs',
       quantity: 0,
       lowStockThreshold: 5,
+      returnable: false,
+      quantityOnLoan: 0,
       itemImage: null,
       locationImage: null,
       locationText: '',
@@ -103,6 +108,12 @@ exports.handler = async (event) => {
     const items = await getItems();
     const index = items.findIndex((i) => i.id === id);
     if (index === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Item not found' }) };
+    if (items[index].quantityOnLoan > 0) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: `"${items[index].name}" still has ${items[index].quantityOnLoan} unit(s) on loan — get them returned first` }),
+      };
+    }
 
     const [removed] = items.splice(index, 1);
     await saveItems(items);

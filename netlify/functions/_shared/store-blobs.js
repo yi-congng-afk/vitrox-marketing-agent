@@ -32,15 +32,15 @@ const SEED_ITEMS = [
   { name: 'Programme Flyers', category: 'Marketing Materials', unit: 'pcs', quantity: 0, lowStockThreshold: 50 },
   { name: 'L-shaped File', category: 'Tabletop Display & Accessories', unit: 'pcs', quantity: 0, lowStockThreshold: 10 },
   { name: 'Grey Files', category: 'Tabletop Display & Accessories', unit: 'pcs', quantity: 0, lowStockThreshold: 10 },
-  { name: 'Roll-up Stand Bunting', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2 },
-  { name: 'A4 Standee', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2 },
+  { name: 'Roll-up Stand Bunting', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2, returnable: true },
+  { name: 'A4 Standee', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2, returnable: true },
   { name: 'Table Cloth', category: 'Tabletop Display & Accessories', unit: 'pcs', quantity: 0, lowStockThreshold: 2 },
   { name: 'Pen', category: 'Promotional Items', unit: 'pcs', quantity: 0, lowStockThreshold: 30 },
-  { name: 'Stand Backdrop', category: 'Event & Display Equipment', unit: 'pcs', quantity: 1, lowStockThreshold: 1 },
-  { name: 'Table', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2 },
-  { name: 'Chair', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 4 },
-  { name: 'Rack Stand', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2 },
-  { name: 'Foldable Desktop', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 1 },
+  { name: 'Stand Backdrop', category: 'Event & Display Equipment', unit: 'pcs', quantity: 1, lowStockThreshold: 1, returnable: true },
+  { name: 'Table', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2, returnable: true },
+  { name: 'Chair', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 4, returnable: true },
+  { name: 'Rack Stand', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 2, returnable: true },
+  { name: 'Foldable Desktop', category: 'Event & Display Equipment', unit: 'pcs', quantity: 0, lowStockThreshold: 1, returnable: true },
 ].map((item, index) => ({
   id: `itm_seed_${index + 1}`,
   name: item.name,
@@ -48,6 +48,8 @@ const SEED_ITEMS = [
   unit: item.unit,
   quantity: item.quantity,
   lowStockThreshold: item.lowStockThreshold,
+  returnable: Boolean(item.returnable),
+  quantityOnLoan: 0,
   itemImage: null,
   locationImage: null,
   locationText: '',
@@ -74,6 +76,9 @@ function transactionsStore() {
 function reportsStore() {
   return getStore(storeConfig('vitrox-store-reports'));
 }
+function loansStore() {
+  return getStore(storeConfig('vitrox-store-loans'));
+}
 
 async function getItems() {
   const store = itemsStore();
@@ -85,11 +90,22 @@ async function getItems() {
 
   let changed = false;
   const migrated = data.map((item) => {
-    if (CATEGORIES.includes(item.category)) return item;
-    const fixedCategory = LEGACY_CATEGORY_BY_SEED_ID[item.id];
-    if (!fixedCategory) return item;
-    changed = true;
-    return { ...item, category: fixedCategory };
+    let next = item;
+
+    if (!CATEGORIES.includes(next.category)) {
+      const fixedCategory = LEGACY_CATEGORY_BY_SEED_ID[next.id];
+      if (fixedCategory) {
+        changed = true;
+        next = { ...next, category: fixedCategory };
+      }
+    }
+
+    if (next.returnable === undefined || next.quantityOnLoan === undefined) {
+      changed = true;
+      next = { ...next, returnable: Boolean(next.returnable), quantityOnLoan: next.quantityOnLoan || 0 };
+    }
+
+    return next;
   });
 
   const rackStandSeed = SEED_ITEMS.find((i) => i.name === 'Rack Stand');
@@ -125,6 +141,15 @@ async function saveReports(reports) {
   await reportsStore().setJSON('reports', reports);
 }
 
+async function getLoans() {
+  const data = await loansStore().get('loans', { type: 'json' });
+  return data || [];
+}
+
+async function saveLoans(loans) {
+  await loansStore().setJSON('loans', loans);
+}
+
 function genId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -137,5 +162,7 @@ module.exports = {
   saveTransactions,
   getReports,
   saveReports,
+  getLoans,
+  saveLoans,
   genId,
 };

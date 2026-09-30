@@ -2,6 +2,7 @@ const API = {
   items: '/.netlify/functions/store-items',
   txns: '/.netlify/functions/store-transactions',
   reports: '/.netlify/functions/store-reports',
+  loans: '/.netlify/functions/store-loans',
 };
 
 const ADMIN_PW_KEY = 'vitroxStoreAdminPw';
@@ -177,9 +178,12 @@ async function loadItems() {
 }
 
 async function loadReportsBadge() {
-  const res = await fetch(`${API.reports}?status=open`);
-  const data = await res.json();
-  const count = (data.reports || []).length;
+  const [reportsRes, loansRes] = await Promise.all([fetch(`${API.reports}?status=open`), fetch(`${API.loans}?status=open`)]);
+  const data = await reportsRes.json();
+  const loanData = await loansRes.json();
+  const today = new Date().toISOString().slice(0, 10);
+  const overdueCount = (loanData.loans || []).filter((l) => l.expectedReturnDate && l.expectedReturnDate < today).length;
+  const count = (data.reports || []).length + overdueCount;
   const badge = el('reports-badge');
   if (count > 0) {
     badge.hidden = false;
@@ -189,8 +193,12 @@ async function loadReportsBadge() {
   }
 }
 
+function availableQty(item) {
+  return item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity;
+}
+
 function lowStockItems() {
-  return items.filter((i) => i.quantity <= i.lowStockThreshold);
+  return items.filter((i) => availableQty(i) <= i.lowStockThreshold);
 }
 
 function renderLowStockBanner() {
@@ -273,8 +281,10 @@ function renderGrid() {
 
     const qtyRow = document.createElement('div');
     qtyRow.className = 'item-card-qty';
-    const low = item.quantity <= item.lowStockThreshold;
-    qtyRow.innerHTML = `<span class="qty-pill ${low ? 'low' : 'ok'}">${item.quantity} ${item.unit || 'pcs'}</span>`;
+    const available = availableQty(item);
+    const low = available <= item.lowStockThreshold;
+    const onLoanTag = item.returnable && item.quantityOnLoan > 0 ? `<span class="on-loan-tag">${item.quantityOnLoan} on loan</span>` : '';
+    qtyRow.innerHTML = `<span class="qty-pill ${low ? 'low' : 'ok'}">${available} ${item.unit || 'pcs'} avail.</span>${onLoanTag}`;
 
     body.appendChild(tag);
     body.appendChild(name);
@@ -297,10 +307,25 @@ async function openDetail(itemId) {
   el('detail-category').textContent = item.category;
   el('detail-name').textContent = item.name;
   el('detail-location-text').textContent = item.locationText || 'Not specified';
-  el('detail-qty').textContent = item.quantity;
   el('detail-unit').textContent = item.unit || 'pcs';
+  el('detail-unit-2').textContent = item.unit || 'pcs';
   el('detail-notes').textContent = item.notes || '';
-  el('detail-low-stock').hidden = item.quantity > item.lowStockThreshold;
+
+  const available = availableQty(item);
+  el('detail-qty').textContent = available;
+  el('detail-low-stock').hidden = available > item.lowStockThreshold;
+
+  const onLoanRow = el('detail-on-loan-row');
+  if (item.returnable && item.quantityOnLoan > 0) {
+    onLoanRow.hidden = false;
+    el('detail-on-loan').textContent = item.quantityOnLoan;
+  } else {
+    onLoanRow.hidden = true;
+  }
+
+  el('detail-moveout-btn').hidden = Boolean(item.returnable);
+  el('detail-loanout-btn').hidden = !item.returnable;
+  el('detail-return-btn').hidden = !item.returnable;
 
   const itemImg = el('detail-item-image');
   itemImg.src = item.itemImage || '';
@@ -316,41 +341,64 @@ async function openDetail(itemId) {
 }
 
 async function loadHistory(itemId) {
-  const res = await fetch(`${API.txns}?itemId=${encodeURIComponent(itemId)}`);
-  const data = await res.json();
+  const [txnRes, loanRes] = await Promise.all([
+    fetch(`${API.txns}?itemId=${encodeURIComponent(itemId)}`),
+    fetch(`${API.loans}?itemId=${encodeURIComponent(itemId)}`),
+  ]);
+  const txnData = await txnRes.json();
+  const loanData = await loanRes.json();
+
+  const events = [];
+  (txnData.transactions || []).forEach((t) => events.push({ timestamp: t.timestamp, kind: 'txn', data: t }));
+  (loanData.loans || []).forEach((l) => {
+    events.push({ timestamp: l.loanedAt, kind: 'loan-out', data: l });
+    (l.returns || []).forEach((r) => events.push({ timestamp: r.returnedAt, kind: 'loan-return', data: { ...r, loan: l } }));
+  });
+  events.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
   const body = el('detail-history-body');
   body.innerHTML = '';
-  const list = data.transactions || [];
 
-  list.slice(0, 10).forEach((t) => {
+  events.slice(0, 15).forEach((event) => {
     const row = document.createElement('tr');
-    const date = new Date(t.timestamp).toLocaleString();
-    row.innerHTML = `<td>${date}</td><td>${t.type === 'add' ? '+ Add On' : '− Move Out'}</td><td>${t.quantity}</td><td>${escapeHtml(t.name)} (${escapeHtml(t.employeeNo)})</td><td>${escapeHtml(t.remarks || '')}</td>`;
-
+    const date = new Date(event.timestamp).toLocaleString();
     const actionsCell = document.createElement('td');
-    if (isAdminUnlocked()) {
-      const editBtn = document.createElement('button');
-      editBtn.className = 'ghost-btn';
-      editBtn.textContent = '✎';
-      editBtn.title = 'Edit this record';
-      editBtn.type = 'button';
-      editBtn.addEventListener('click', () => openEditTxnModal(t));
 
-      const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'ghost-btn';
-      deleteBtn.textContent = '🗑';
-      deleteBtn.title = 'Delete this record';
-      deleteBtn.type = 'button';
-      deleteBtn.addEventListener('click', () => deleteTxn(t));
+    if (event.kind === 'txn') {
+      const t = event.data;
+      row.innerHTML = `<td>${date}</td><td>${t.type === 'add' ? '+ Add On' : '− Move Out'}</td><td>${t.quantity}</td><td>${escapeHtml(t.name)} (${escapeHtml(t.employeeNo)})</td><td>${escapeHtml(t.remarks || '')}</td>`;
+      if (isAdminUnlocked()) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'ghost-btn';
+        editBtn.textContent = '✎';
+        editBtn.title = 'Edit this record';
+        editBtn.type = 'button';
+        editBtn.addEventListener('click', () => openEditTxnModal(t));
 
-      actionsCell.appendChild(editBtn);
-      actionsCell.appendChild(deleteBtn);
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'ghost-btn';
+        deleteBtn.textContent = '🗑';
+        deleteBtn.title = 'Delete this record';
+        deleteBtn.type = 'button';
+        deleteBtn.addEventListener('click', () => deleteTxn(t));
+
+        actionsCell.appendChild(editBtn);
+        actionsCell.appendChild(deleteBtn);
+      }
+    } else if (event.kind === 'loan-out') {
+      const l = event.data;
+      const dueText = l.expectedReturnDate ? `, due ${l.expectedReturnDate}` : '';
+      row.innerHTML = `<td>${date}</td><td>📤 Loan Out</td><td>${l.quantity}</td><td>${escapeHtml(l.name)} (${escapeHtml(l.employeeNo)})</td><td>${escapeHtml(l.purpose)}${dueText}</td>`;
+    } else {
+      const r = event.data;
+      row.innerHTML = `<td>${date}</td><td>📥 Return</td><td>${r.quantity}</td><td>${escapeHtml(r.name)} (${escapeHtml(r.employeeNo)})</td><td>${escapeHtml(r.notes || '')} (against loan to ${escapeHtml(r.loan.name)})</td>`;
     }
+
     row.appendChild(actionsCell);
     body.appendChild(row);
   });
 
-  if (list.length === 0) {
+  if (events.length === 0) {
     body.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted)">No activity yet.</td></tr>';
   }
 }
@@ -471,6 +519,115 @@ el('txn-form').addEventListener('submit', async (e) => {
   openDetail(selectedItemId);
 });
 
+el('detail-loanout-btn').addEventListener('click', () => {
+  const item = items.find((i) => i.id === selectedItemId);
+  if (!item) return;
+  el('loan-out-item').textContent = `${item.name} — ${availableQty(item)} ${item.unit || 'pcs'} available`;
+  el('loan-out-name').value = '';
+  el('loan-out-employee-no').value = '';
+  el('loan-out-quantity').value = '';
+  el('loan-out-purpose').value = '';
+  el('loan-out-expected-return').value = '';
+  el('loan-out-form-error').hidden = true;
+  openModal('loan-out-modal');
+});
+
+el('loan-out-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    itemId: selectedItemId,
+    quantity: Number(el('loan-out-quantity').value),
+    name: el('loan-out-name').value,
+    employeeNo: el('loan-out-employee-no').value,
+    purpose: el('loan-out-purpose').value,
+    expectedReturnDate: el('loan-out-expected-return').value || null,
+  };
+
+  const res = await fetch(API.loans, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+
+  if (!res.ok) {
+    el('loan-out-form-error').textContent = data.error || 'Something went wrong.';
+    el('loan-out-form-error').hidden = false;
+    return;
+  }
+
+  closeModal('loan-out-modal');
+  showToast('Items loaned out.', 'success');
+  await loadItems();
+  openDetail(selectedItemId);
+});
+
+let openLoansForReturn = [];
+
+el('detail-return-btn').addEventListener('click', async () => {
+  const item = items.find((i) => i.id === selectedItemId);
+  if (!item) return;
+
+  const res = await fetch(`${API.loans}?itemId=${encodeURIComponent(item.id)}&status=open`);
+  const data = await res.json();
+  openLoansForReturn = data.loans || [];
+
+  const select = el('return-loan-select');
+  if (openLoansForReturn.length === 0) {
+    select.innerHTML = '<option value="">No open loans for this item</option>';
+  } else {
+    select.innerHTML = openLoansForReturn
+      .map((l) => {
+        const outstanding = l.quantity - l.quantityReturned;
+        const due = l.expectedReturnDate ? `, due ${l.expectedReturnDate}` : '';
+        return `<option value="${l.id}">${escapeHtml(l.name)} (${escapeHtml(l.employeeNo)}) — ${outstanding} outstanding — ${escapeHtml(l.purpose)}${due}</option>`;
+      })
+      .join('');
+  }
+
+  el('return-quantity').value = '';
+  el('return-name').value = '';
+  el('return-employee-no').value = '';
+  el('return-notes').value = '';
+  el('return-form-error').hidden = true;
+  openModal('return-modal');
+});
+
+el('return-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const loanId = el('return-loan-select').value;
+  if (!loanId) {
+    el('return-form-error').textContent = 'No open loan selected.';
+    el('return-form-error').hidden = false;
+    return;
+  }
+
+  const body = {
+    quantity: Number(el('return-quantity').value),
+    name: el('return-name').value,
+    employeeNo: el('return-employee-no').value,
+    notes: el('return-notes').value,
+  };
+
+  const res = await fetch(`${API.loans}?id=${encodeURIComponent(loanId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+
+  if (!res.ok) {
+    el('return-form-error').textContent = data.error || 'Something went wrong.';
+    el('return-form-error').hidden = false;
+    return;
+  }
+
+  closeModal('return-modal');
+  showToast('Return recorded.', 'success');
+  await loadItems();
+  openDetail(selectedItemId);
+});
+
 el('detail-report-btn').addEventListener('click', () => {
   const item = items.find((i) => i.id === selectedItemId);
   if (!item) return;
@@ -522,10 +679,25 @@ async function openReportsPanel() {
     ? `<h3>Low Stock</h3>${low
         .map(
           (i) =>
-            `<div class="low-stock-row"><div><strong>${escapeHtml(i.name)}</strong><span>${i.category}</span></div><span class="qty-pill low">${i.quantity} ${i.unit || 'pcs'}</span></div>`
+            `<div class="low-stock-row"><div><strong>${escapeHtml(i.name)}</strong><span>${i.category}</span></div><span class="qty-pill low">${availableQty(i)} ${i.unit || 'pcs'}</span></div>`
         )
         .join('')}`
     : '<p style="color:var(--text-muted); font-size:0.85rem;">No low-stock items right now.</p>';
+
+  const loanRes = await fetch(`${API.loans}?status=open`);
+  const loanData = await loanRes.json();
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = (loanData.loans || []).filter((l) => l.expectedReturnDate && l.expectedReturnDate < today);
+  const overduePanel = el('overdue-loans-panel');
+  overduePanel.innerHTML = overdue.length
+    ? `<h3>Overdue Loans</h3>${overdue
+        .map((l) => {
+          const outstanding = l.quantity - l.quantityReturned;
+          const daysOverdue = Math.round((new Date(today) - new Date(l.expectedReturnDate)) / 86400000);
+          return `<div class="low-stock-row"><div><strong>${escapeHtml(l.itemName)} × ${outstanding}</strong><span>With ${escapeHtml(l.name)} (${escapeHtml(l.employeeNo)}) for ${escapeHtml(l.purpose)}</span></div><span class="qty-pill low">${daysOverdue}d overdue</span></div>`;
+        })
+        .join('')}`
+    : '';
 
   const res = await fetch(`${API.reports}?status=open`);
   const data = await res.json();
@@ -612,6 +784,7 @@ function openItemForm(itemId) {
   el('form-threshold').value = item ? item.lowStockThreshold : 5;
   el('form-location-text').value = item ? item.locationText : '';
   el('form-notes').value = item ? item.notes : '';
+  el('form-returnable').checked = item ? Boolean(item.returnable) : false;
 
   formImageDataUrl = item ? item.itemImage : null;
   formLocationImageDataUrl = item ? item.locationImage : null;
@@ -657,6 +830,7 @@ el('item-form').addEventListener('submit', async (e) => {
     lowStockThreshold: Number(el('form-threshold').value),
     locationText: el('form-location-text').value,
     notes: el('form-notes').value,
+    returnable: el('form-returnable').checked,
     itemImage: formImageDataUrl,
     locationImage: formLocationImageDataUrl,
   };
@@ -730,8 +904,18 @@ function downloadCsv(filename, rows) {
 
 el('export-items-btn').addEventListener('click', () => {
   const rows = [
-    ['Name', 'Category', 'Quantity', 'Unit', 'Low Stock Threshold', 'Location'],
-    ...items.map((i) => [i.name, i.category, i.quantity, i.unit, i.lowStockThreshold, i.locationText]),
+    ['Name', 'Category', 'Total Quantity', 'On Loan', 'Available', 'Unit', 'Low Stock Threshold', 'Returnable', 'Location'],
+    ...items.map((i) => [
+      i.name,
+      i.category,
+      i.quantity,
+      i.quantityOnLoan || 0,
+      availableQty(i),
+      i.unit,
+      i.lowStockThreshold,
+      i.returnable ? 'Yes' : 'No',
+      i.locationText,
+    ]),
   ];
   downloadCsv(`vitrox-store-inventory-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 });

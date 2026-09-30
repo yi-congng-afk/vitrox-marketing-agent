@@ -57,12 +57,15 @@
           <h2 id="detail-name"></h2>
           <p class="detail-location-text">📍 <span id="detail-location-text"></span></p>
           <p class="detail-qty">Current quantity: <strong id="detail-qty"></strong> <span id="detail-unit"></span></p>
+          <p class="detail-qty" id="detail-on-loan-row" hidden>On loan: <strong id="detail-on-loan"></strong> <span id="detail-unit-2"></span></p>
           <p id="detail-low-stock" class="low-stock-tag" hidden>⚠ Low stock</p>
           <p id="detail-notes" class="detail-notes"></p>
 
           <div class="detail-actions">
             <button id="detail-addon-btn" class="primary-btn" type="button">+ Add On</button>
             <button id="detail-moveout-btn" class="danger-btn" type="button">− Move Out</button>
+            <button id="detail-loanout-btn" class="danger-btn" type="button" hidden>📤 Loan Out</button>
+            <button id="detail-return-btn" class="ghost-btn" type="button" hidden>📥 Return Items</button>
             <button id="detail-report-btn" class="ghost-btn" type="button">🚩 Report Issue</button>
             <button id="detail-edit-btn" class="ghost-btn admin-only" type="button" hidden>✎ Edit</button>
             <button id="detail-delete-btn" class="ghost-btn admin-only" type="button" hidden>🗑 Delete</button>
@@ -93,6 +96,10 @@
           <label>Current quantity <input id="form-quantity" type="number" min="0" step="1" value="0" required /></label>
           <label>Low-stock alert threshold <input id="form-threshold" type="number" min="0" step="1" value="5" required /></label>
         </div>
+        <label class="checkbox-label">
+          <input id="form-returnable" type="checkbox" />
+          Loanable equipment (tables, chairs, backdrops, etc.) — tracks Loan Out / Return instead of permanent consumption
+        </label>
         <label>Location (text, e.g. "Store Room A, Shelf 3") <input id="form-location-text" type="text" /></label>
         <label>Item photo <input id="form-item-image" type="file" accept="image/*" /></label>
         <img id="form-item-image-preview" class="upload-preview" hidden />
@@ -124,6 +131,49 @@
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
         <p id="txn-form-error" class="error-text" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Loan out modal -->
+  <div id="loan-out-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>Loan Out</h2>
+      <p id="loan-out-item"></p>
+      <form id="loan-out-form">
+        <label>Your name <input id="loan-out-name" type="text" required /></label>
+        <label>Employee number <input id="loan-out-employee-no" type="text" required /></label>
+        <label>Quantity <input id="loan-out-quantity" type="number" min="1" step="1" required /></label>
+        <label>Purpose (e.g. which event) <textarea id="loan-out-purpose" rows="2" required></textarea></label>
+        <label>Expected return date (optional) <input id="loan-out-expected-return" type="date" /></label>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Submit</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+        <p id="loan-out-form-error" class="error-text" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Return items modal -->
+  <div id="return-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>Return Items</h2>
+      <label>Which loan is this returning?
+        <select id="return-loan-select"></select>
+      </label>
+      <form id="return-form">
+        <label>Quantity being returned now <input id="return-quantity" type="number" min="1" step="1" required /></label>
+        <label>Your name <input id="return-name" type="text" required /></label>
+        <label>Employee number <input id="return-employee-no" type="text" required /></label>
+        <label>Notes (optional, e.g. condition) <textarea id="return-notes" rows="2"></textarea></label>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Submit</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+        <p id="return-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
@@ -186,6 +236,7 @@
       <button class="modal-close" data-close>✕</button>
       <h2>Alerts &amp; Reports</h2>
       <div id="low-stock-list-panel"></div>
+      <div id="overdue-loans-panel"></div>
       <h3>Open Reports</h3>
       <div id="reports-list"></div>
     </div>

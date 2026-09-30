@@ -47,6 +47,26 @@ label {
   margin-bottom: 0.85rem;
 }
 
+.checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.checkbox-label input {
+  width: auto;
+}
+
+.on-loan-tag {
+  display: inline-block;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-weight: 600;
+  font-size: 0.75rem;
+  margin-left: 0.4rem;
+}
+
 .topbar {
   display: flex;
   align-items: center;
