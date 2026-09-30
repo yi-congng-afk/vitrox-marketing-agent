@@ -388,7 +388,7 @@ async function loadHistory(itemId) {
     } else if (event.kind === 'loan-out') {
       const l = event.data;
       const dueText = l.expectedReturnDate ? `, due ${l.expectedReturnDate}` : '';
-      row.innerHTML = `<td>${date}</td><td>📤 Loan Out</td><td>${l.quantity}</td><td>${escapeHtml(l.name)} (${escapeHtml(l.employeeNo)})</td><td>${escapeHtml(l.purpose)}${dueText}</td>`;
+      row.innerHTML = `<td>${date}</td><td>− Move Out</td><td>${l.quantity}</td><td>${escapeHtml(l.name)} (${escapeHtml(l.employeeNo)})</td><td>${escapeHtml(l.purpose)}${dueText}</td>`;
     } else {
       const r = event.data;
       row.innerHTML = `<td>${date}</td><td>📥 Return</td><td>${r.quantity}</td><td>${escapeHtml(r.name)} (${escapeHtml(r.employeeNo)})</td><td>${escapeHtml(r.notes || '')} (against loan to ${escapeHtml(r.loan.name)})</td>`;
@@ -557,7 +557,7 @@ el('loan-out-form').addEventListener('submit', async (e) => {
   }
 
   closeModal('loan-out-modal');
-  showToast('Items loaned out.', 'success');
+  showToast('Stock moved out.', 'success');
   await loadItems();
   openDetail(selectedItemId);
 });
