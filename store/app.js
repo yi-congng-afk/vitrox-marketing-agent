@@ -469,7 +469,7 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-el('detail-addon-btn').addEventListener('click', () => openTxnModal('add'));
+el('detail-addon-btn').addEventListener('click', () => requireAdminThen(() => openTxnModal('add')));
 el('detail-moveout-btn').addEventListener('click', () => openTxnModal('remove'));
 
 function openTxnModal(type) {
@@ -500,11 +500,19 @@ el('txn-form').addEventListener('submit', async (e) => {
     remarks: el('txn-remarks').value,
   };
 
-  const res = await fetch(API.txns, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const res =
+    type === 'add'
+      ? await adminFetch(API.txns, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+      : await fetch(API.txns, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+  if (!res) return;
   const data = await res.json();
 
   if (!res.ok) {
@@ -566,7 +574,7 @@ let openLoansForReturn = [];
 
 el('detail-return-btn').addEventListener('click', async () => {
   const item = items.find((i) => i.id === selectedItemId);
-  if (!item) return;
+  if (!item || !item.returnable) return;
 
   const res = await fetch(`${API.loans}?itemId=${encodeURIComponent(item.id)}&status=open`);
   const data = await res.json();

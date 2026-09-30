@@ -30,6 +30,10 @@ exports.handler = async (event) => {
     if (!itemId || !['add', 'remove'].includes(type)) {
       return { statusCode: 400, body: JSON.stringify({ error: 'itemId and a valid type (add/remove) are required' }) };
     }
+    if (type === 'add') {
+      const adminError = requireAdmin(event);
+      if (adminError) return adminError;
+    }
     const qty = Math.round(Number(quantity));
     if (!qty || qty <= 0) {
       return { statusCode: 400, body: JSON.stringify({ error: 'quantity must be a positive number' }) };
