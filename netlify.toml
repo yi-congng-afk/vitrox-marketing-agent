@@ -1,21 +1,22 @@
 [build]
   functions = "netlify/functions"
-  publish = "."
+  publish = "store"
 
 [functions]
   node_bundler = "esbuild"
 
-[[headers]]
-  for = "/store/*"
-  [headers.values]
-    Cache-Control = "no-cache"
+# The dashboard used to live under /store/ — keep old bookmarks working.
+[[redirects]]
+  from = "/store"
+  to = "/"
+  status = 302
+
+[[redirects]]
+  from = "/store/*"
+  to = "/:splat"
+  status = 302
 
 [[headers]]
-  for = "/*.js"
-  [headers.values]
-    Cache-Control = "no-cache"
-
-[[headers]]
-  for = "/*.css"
+  for = "/*"
   [headers.values]
     Cache-Control = "no-cache"

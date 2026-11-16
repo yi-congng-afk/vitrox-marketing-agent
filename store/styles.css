@@ -96,9 +96,24 @@ label {
   gap: 1rem;
 }
 
+.brand-logo {
+  height: 34px;
+  width: auto;
+  display: block;
+}
+
 .topbar-left h1 {
   font-size: 1.15rem;
   margin: 0;
+  padding-left: 1rem;
+  border-left: 1px solid var(--border);
+  line-height: 34px;
+}
+
+@media (max-width: 480px) {
+  .brand-logo { height: 26px; }
+  .topbar-left { gap: 0.7rem; }
+  .topbar-left h1 { font-size: 1rem; padding-left: 0.7rem; line-height: 26px; }
 }
 
 .topbar-right {
