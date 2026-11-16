@@ -1677,7 +1677,7 @@ function renderLoansPanel() {
       actionCell.className = 'row-actions';
       const returnBtn = document.createElement('button');
       returnBtn.type = 'button';
-      returnBtn.className = 'ghost-btn';
+      returnBtn.className = 'ghost-btn sky-btn';
       returnBtn.innerHTML = `${icon('return')} Return`;
       returnBtn.addEventListener('click', () => openReturnModal([loan], { origin: 'loans', checkAll: true }));
       actionCell.appendChild(returnBtn);

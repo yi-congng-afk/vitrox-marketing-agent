@@ -43,7 +43,7 @@
           <h1>Store Room Dashboard</h1>
         </div>
         <nav class="topbar-right" aria-label="Main actions">
-          <button id="loans-btn" class="nav-btn" type="button" aria-label="Loan records">
+          <button id="loans-btn" class="nav-btn sky-btn" type="button" aria-label="Loan records">
             <svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg>
             <span class="btn-label">Loan Records</span>
             <span id="loans-badge" class="badge" hidden>0</span>
@@ -184,7 +184,7 @@
               </span>
               <button id="detail-cart-btn" class="primary-btn" type="button">Add to Cart</button>
             </span>
-            <button id="detail-return-btn" class="ghost-btn" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> Return Items</button>
+            <button id="detail-return-btn" class="ghost-btn sky-btn" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> Return Items</button>
             <button id="detail-report-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-flag"/></svg> Report Issue</button>
           </div>
           <div id="detail-admin-actions" class="detail-actions admin-actions admin-only" hidden>
@@ -308,7 +308,7 @@
       <p id="success-loan-note" class="loanable-note" hidden></p>
       <div class="form-actions">
         <button type="button" class="primary-btn" data-close data-autofocus>Done</button>
-        <button id="success-loans-btn" type="button" class="ghost-btn" hidden>View Loan Records</button>
+        <button id="success-loans-btn" type="button" class="ghost-btn sky-btn" hidden>View Loan Records</button>
       </div>
     </div>
   </div>
@@ -327,7 +327,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
           <input id="loans-search" type="search" placeholder="Search item, borrower or event…" aria-label="Search loan records" autocomplete="off" />
         </div>
-        <button id="loans-return-selected-btn" class="primary-btn" type="button">Return Selected</button>
+        <button id="loans-return-selected-btn" class="ghost-btn sky-btn" type="button">Return Selected</button>
         <button id="loans-export-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export (CSV)</button>
       </div>
       <div class="table-scroll">
@@ -355,7 +355,7 @@
         <label>Notes (optional, e.g. condition) <textarea id="return-notes" rows="2"></textarea></label>
         <p id="return-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
-          <button id="return-submit-btn" type="submit" class="primary-btn"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg> Record Return</button>
+          <button id="return-submit-btn" type="submit" class="ghost-btn sky-btn"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg> Record Return</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
       </form>
