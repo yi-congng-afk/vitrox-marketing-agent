@@ -79,6 +79,92 @@ function reportsStore() {
 function loansStore() {
   return getStore(storeConfig('vitrox-store-loans'));
 }
+function imagesStore() {
+  return getStore(storeConfig('vitrox-store-images'));
+}
+
+// ---- Photos ----
+// Photos used to be saved inside the items list itself (as data: URLs), which
+// made that list megabytes big and slow to load and to save on every action.
+// Each photo now lives in its own blob, and the item only keeps a short URL to
+// it. The id is new for every upload, so browsers can cache a photo forever.
+
+const IMAGE_FIELDS = ['itemImage', 'locationImage'];
+const IMAGE_URL_PREFIX = '/.netlify/functions/store-image?id=';
+const INLINE_IMAGE_PATTERN = /^data:image\/(jpeg|jpg|png|webp|gif);base64,/;
+const MAX_IMAGE_CHARS = 3000000;
+const MIGRATE_BATCH = 8;
+
+function isInlineImage(value) {
+  return typeof value === 'string' && INLINE_IMAGE_PATTERN.test(value.slice(0, 40));
+}
+
+function isStoredImageUrl(value) {
+  return typeof value === 'string' && value.startsWith(IMAGE_URL_PREFIX);
+}
+
+async function saveImage(dataUrl) {
+  if (!isInlineImage(dataUrl)) throw new Error('Photos must be JPEG, PNG or WebP images');
+  if (dataUrl.length > MAX_IMAGE_CHARS) throw new Error('That photo is too large — please use a smaller one');
+  const id = genId('img');
+  await imagesStore().set(id, dataUrl);
+  return IMAGE_URL_PREFIX + id;
+}
+
+async function getImage(id) {
+  return imagesStore().get(id);
+}
+
+async function deleteImage(url) {
+  if (!isStoredImageUrl(url)) return;
+  try {
+    await imagesStore().delete(url.slice(IMAGE_URL_PREFIX.length));
+  } catch {
+    // A leftover photo blob is harmless; never fail the request over it.
+  }
+}
+
+// Moves photos still saved inside the items list out into the photo store, a
+// few per call so a request never runs long. A photo is only dropped from the
+// list after its copy has been written, so nothing is lost if a step fails.
+async function migrateInlineImages(items) {
+  const pending = [];
+  for (const item of items) {
+    for (const field of IMAGE_FIELDS) {
+      if (isInlineImage(item[field]) && item[field].length <= MAX_IMAGE_CHARS) {
+        pending.push({ id: item.id, field, dataUrl: item[field] });
+      }
+    }
+  }
+  if (pending.length === 0) return items;
+
+  const moved = (
+    await Promise.all(
+      pending.slice(0, MIGRATE_BATCH).map(async (entry) => {
+        try {
+          return { ...entry, url: await saveImage(entry.dataUrl) };
+        } catch {
+          return null;
+        }
+      })
+    )
+  ).filter(Boolean);
+  if (moved.length === 0) return items;
+
+  // Re-read just before saving so stock changes made while the photos were
+  // being copied are not overwritten with the older list.
+  const fresh = await getItems();
+  let changed = false;
+  for (const entry of moved) {
+    const item = fresh.find((i) => i.id === entry.id);
+    if (item && item[entry.field] === entry.dataUrl) {
+      item[entry.field] = entry.url;
+      changed = true;
+    }
+  }
+  if (changed) await saveItems(fresh);
+  return fresh;
+}
 
 async function getItems() {
   const store = itemsStore();
@@ -165,4 +251,10 @@ module.exports = {
   getLoans,
   saveLoans,
   genId,
+  IMAGE_FIELDS,
+  isInlineImage,
+  saveImage,
+  getImage,
+  deleteImage,
+  migrateInlineImages,
 };

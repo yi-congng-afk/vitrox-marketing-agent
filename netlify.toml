@@ -19,4 +19,10 @@
 [[headers]]
   for = "/*"
   [headers.values]
+    # Always check for the newest page/script, so an update is seen right away.
     Cache-Control = "no-cache"
+    # Internal tool: keep it out of search engines and out of other sites' frames.
+    X-Robots-Tag = "noindex, nofollow"
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"

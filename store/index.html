@@ -3,89 +3,203 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#233064" />
   <title>ViTrox College Store</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 
-  <header class="topbar">
-    <div class="topbar-left">
-      <img class="brand-logo" src="vitrox-logo.png" alt="ViTrox" width="801" height="160" />
-      <h1>Store Room Dashboard</h1>
-    </div>
-    <div class="topbar-right">
-      <button id="cart-btn" class="primary-btn" type="button">
-        🛒 Cart <span id="cart-badge" class="badge" hidden>0</span>
-      </button>
-      <button id="loans-btn" class="icon-btn" type="button">
-        📋 Loan Records <span id="loans-badge" class="badge" hidden>0</span>
-      </button>
-      <button id="reports-btn" class="icon-btn" type="button">
-        🔔 Alerts <span id="reports-badge" class="badge" hidden>0</span>
-      </button>
-      <button id="admin-btn" class="ghost-btn" type="button">🔒 Admin</button>
-    </div>
-  </header>
+  <!-- Icon set (drawn once here, reused everywhere with <use>) -->
+  <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-cart" viewBox="0 0 24 24"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12"/></symbol>
+    <symbol id="i-clipboard" viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></symbol>
+    <symbol id="i-return" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></symbol>
+  </svg>
 
-  <div id="low-stock-banner" class="banner" hidden></div>
+  <div id="app">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="topbar-left">
+          <img class="brand-logo" src="vitrox-logo.png" alt="ViTrox" width="801" height="160" />
+          <h1>Store Room Dashboard</h1>
+        </div>
+        <nav class="topbar-right" aria-label="Main actions">
+          <button id="loans-btn" class="nav-btn" type="button" aria-label="Loan records">
+            <svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg>
+            <span class="btn-label">Loan Records</span>
+            <span id="loans-badge" class="badge" hidden>0</span>
+          </button>
+          <button id="reports-btn" class="nav-btn" type="button" aria-label="Alerts and reports">
+            <svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg>
+            <span class="btn-label">Alerts</span>
+            <span id="reports-badge" class="badge" hidden>0</span>
+          </button>
+          <button id="admin-btn" class="nav-btn" type="button" aria-label="Admin"></button>
+          <button id="cart-btn" class="primary-btn cart-btn" type="button" aria-label="Open cart">
+            <svg class="icon" aria-hidden="true"><use href="#i-cart"/></svg>
+            <span class="btn-label">Cart</span>
+            <span id="cart-badge" class="badge" hidden>0</span>
+          </button>
+        </nav>
+      </div>
+    </header>
 
-  <div class="toolbar">
-    <input id="search-input" type="search" placeholder="Search items..." />
-    <div id="category-filters" class="chip-row"></div>
+    <main class="page">
+      <p class="mobile-title" aria-hidden="true">Store Room Dashboard</p>
+
+      <div id="low-stock-banner" class="banner" hidden></div>
+
+      <div id="admin-bar" class="admin-bar admin-only" hidden>
+        <span class="admin-bar-label">
+          <svg class="icon" aria-hidden="true"><use href="#i-unlock"/></svg> Admin tools
+        </span>
+        <button id="add-item-btn" class="primary-btn admin-only" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add New Item
+        </button>
+        <button id="remove-item-btn" class="ghost-btn admin-only" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Remove Item
+        </button>
+      </div>
+
+      <div class="toolbar">
+        <div class="search-box">
+          <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="search-input" type="search" placeholder="Search by item, category or location…" aria-label="Search items" autocomplete="off" />
+        </div>
+        <select id="sort-select" aria-label="Sort items">
+          <option value="default">Sort: Default</option>
+          <option value="name">Sort: Name (A–Z)</option>
+          <option value="low">Sort: Lowest stock first</option>
+          <option value="high">Sort: Highest stock first</option>
+        </select>
+      </div>
+
+      <div id="category-filters" class="chip-row" role="group" aria-label="Filter by category"></div>
+
+      <div class="results-bar">
+        <span id="results-count" class="results-count"></span>
+        <span class="results-tools">
+          <button id="refresh-btn" class="link-btn" type="button" title="Check for the latest stock">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg> <span id="last-updated">Refresh</span>
+          </button>
+          <button id="export-items-btn" class="link-btn" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Inventory (CSV)
+          </button>
+          <button id="export-txns-btn" class="link-btn" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Activity log (CSV)
+          </button>
+        </span>
+      </div>
+
+      <div id="item-grid" class="item-grid" aria-live="off"></div>
+
+      <div id="empty-state" class="state-block" hidden>
+        <svg class="icon state-icon" aria-hidden="true"><use href="#i-search"/></svg>
+        <p class="state-title">No items match</p>
+        <p class="state-text">Try a different search word or category.</p>
+        <button id="clear-filters-btn" class="ghost-btn" type="button">Clear search &amp; filters</button>
+      </div>
+
+      <div id="load-error" class="state-block" hidden>
+        <svg class="icon state-icon" aria-hidden="true"><use href="#i-alert"/></svg>
+        <p class="state-title">Couldn't load the store</p>
+        <p id="load-error-text" class="state-text"></p>
+        <button id="retry-btn" class="primary-btn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg> Try again
+        </button>
+      </div>
+    </main>
   </div>
-
-  <div class="toolbar toolbar-actions">
-    <button id="add-item-btn" class="primary-btn" type="button">+ Add New Item</button>
-    <button id="remove-item-btn" class="ghost-btn" type="button">🗑 Remove Item</button>
-    <button id="export-items-btn" class="ghost-btn" type="button">⬇ Export Inventory (CSV)</button>
-    <button id="export-txns-btn" class="ghost-btn" type="button">⬇ Export Log (CSV)</button>
-  </div>
-
-  <main id="item-grid" class="item-grid"></main>
-  <p id="empty-state" class="empty-state" hidden>No items match your search/filter.</p>
 
   <!-- Item detail modal -->
   <div id="detail-modal" class="modal-overlay" hidden>
-    <div class="modal detail-modal">
-      <button class="modal-close" data-close>✕</button>
+    <div class="modal detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-name" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
       <div class="detail-grid">
         <div class="detail-media">
           <div class="media-block">
-            <span class="media-label">Item Photo</span>
-            <img id="detail-item-image" class="media-img" alt="" />
+            <span class="media-label">Item photo</span>
+            <button id="detail-item-frame" class="media-frame" type="button" title="Click to enlarge">
+              <img id="detail-item-image" class="media-img" alt="" />
+            </button>
+            <div id="detail-item-empty" class="media-empty" hidden>
+              <svg class="icon" aria-hidden="true"><use href="#i-image"/></svg> No photo yet
+            </div>
           </div>
           <div class="media-block">
-            <span class="media-label">Location Photo</span>
-            <img id="detail-location-image" class="media-img" alt="" />
+            <span class="media-label">Where to find it</span>
+            <button id="detail-location-frame" class="media-frame" type="button" title="Click to enlarge">
+              <img id="detail-location-image" class="media-img" alt="" />
+            </button>
+            <div id="detail-location-empty" class="media-empty" hidden>
+              <svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg> No location photo yet
+            </div>
           </div>
         </div>
         <div class="detail-info">
           <span id="detail-category" class="tag"></span>
           <h2 id="detail-name"></h2>
-          <p class="detail-location-text">📍 <span id="detail-location-text"></span></p>
-          <p class="detail-qty">Current quantity: <strong id="detail-qty"></strong> <span id="detail-unit"></span></p>
-          <p class="detail-qty" id="detail-on-loan-row" hidden>On loan: <strong id="detail-on-loan"></strong> <span id="detail-unit-2"></span></p>
-          <p id="detail-low-stock" class="low-stock-tag" hidden>⚠ Low stock</p>
+          <p class="detail-location-text"><svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg> <span id="detail-location-text"></span></p>
+
+          <div class="stat-row">
+            <div class="stat">
+              <span class="stat-label">Available</span>
+              <span class="stat-value"><strong id="detail-qty"></strong> <span id="detail-unit"></span></span>
+            </div>
+            <div class="stat" id="detail-on-loan-row" hidden>
+              <span class="stat-label">On loan</span>
+              <span class="stat-value"><strong id="detail-on-loan"></strong> <span id="detail-unit-2"></span></span>
+            </div>
+            <p id="detail-low-stock" class="low-stock-tag" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg> Low stock</p>
+          </div>
+
           <p id="detail-notes" class="detail-notes"></p>
-          <p id="detail-loanable-note" class="loanable-note" hidden>↩ Loanable item — it stays recorded under the borrower's name until it is returned.</p>
+          <p id="detail-loanable-note" class="loanable-note" hidden><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> <span>Loanable item — it stays recorded under the borrower's name until it is returned.</span></p>
 
           <div class="detail-actions">
             <span class="cart-add-group">
-              <input id="detail-cart-qty" type="number" min="1" step="1" value="1" aria-label="Quantity to move out" />
-              <button id="detail-cart-btn" class="primary-btn" type="button">🛒 Add to Cart</button>
+              <span class="stepper">
+                <button type="button" class="step-btn" data-step="-1" aria-label="Decrease quantity"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+                <input id="detail-cart-qty" type="number" inputmode="numeric" min="1" step="1" value="1" aria-label="Quantity to move out" />
+                <button type="button" class="step-btn" data-step="1" aria-label="Increase quantity"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
+              </span>
+              <button id="detail-cart-btn" class="primary-btn" type="button">Add to Cart</button>
             </span>
-            <button id="detail-return-btn" class="ghost-btn" type="button" hidden>📥 Return Items</button>
-            <button id="detail-addon-btn" class="ghost-btn" type="button">+ Add On</button>
-            <button id="detail-report-btn" class="ghost-btn" type="button">🚩 Report Issue</button>
-            <button id="detail-edit-btn" class="ghost-btn admin-only" type="button" hidden>✎ Edit</button>
-            <button id="detail-delete-btn" class="ghost-btn admin-only" type="button" hidden>🗑 Delete</button>
+            <button id="detail-return-btn" class="ghost-btn" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> Return Items</button>
+            <button id="detail-report-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-flag"/></svg> Report Issue</button>
+          </div>
+          <div id="detail-admin-actions" class="detail-actions admin-actions admin-only" hidden>
+            <button id="detail-addon-btn" class="ghost-btn admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add On Stock</button>
+            <button id="detail-edit-btn" class="ghost-btn admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-pencil"/></svg> Edit</button>
+            <button id="detail-delete-btn" class="ghost-btn danger-text admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Delete</button>
           </div>
 
-          <h3>Recent Activity</h3>
-          <table class="history-table">
-            <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>By</th><th>Remarks</th><th></th></tr></thead>
-            <tbody id="detail-history-body"></tbody>
-          </table>
+          <h3>Recent activity</h3>
+          <div class="table-scroll">
+            <table class="history-table">
+              <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>By</th><th>Remarks</th><th><span class="sr-only">Actions</span></th></tr></thead>
+              <tbody id="detail-history-body"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -93,8 +207,8 @@
 
   <!-- Add/Edit item modal -->
   <div id="item-form-modal" class="modal-overlay" hidden>
-    <div class="modal">
-      <button class="modal-close" data-close>✕</button>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="item-form-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
       <h2 id="item-form-title">Add New Item</h2>
       <form id="item-form">
         <label>Item name <input id="form-name" type="text" required /></label>
@@ -103,90 +217,121 @@
         </label>
         <label>Unit <input id="form-unit" type="text" placeholder="pcs" value="pcs" /></label>
         <div class="form-row">
-          <label>Current quantity <input id="form-quantity" type="number" min="0" step="1" value="0" required /></label>
-          <label>Low-stock alert threshold <input id="form-threshold" type="number" min="0" step="1" value="5" required /></label>
+          <label>Current quantity <input id="form-quantity" type="number" inputmode="numeric" min="0" step="1" value="0" required /></label>
+          <label>Low-stock alert at <input id="form-threshold" type="number" inputmode="numeric" min="0" step="1" value="5" required /></label>
         </div>
         <label class="checkbox-label">
           <input id="form-returnable" type="checkbox" />
-          Loanable equipment (tables, chairs, backdrops, etc.) — adds a Return Items option and tracks Move Out as a loan instead of permanent consumption
+          <span>Loanable equipment (tables, chairs, backdrops, etc.) — adds a Return Items option and tracks Move Out as a loan instead of permanent consumption</span>
         </label>
         <label>Location (text, e.g. "Store Room A, Shelf 3") <input id="form-location-text" type="text" /></label>
         <label>Item photo <input id="form-item-image" type="file" accept="image/*" /></label>
-        <img id="form-item-image-preview" class="upload-preview" hidden />
+        <div id="form-item-image-row" class="upload-preview-row" hidden>
+          <img id="form-item-image-preview" class="upload-preview" alt="Item photo preview" />
+          <button id="form-item-image-remove" class="link-btn danger-text" type="button">Remove photo</button>
+        </div>
         <label>Location photo <input id="form-location-image" type="file" accept="image/*" /></label>
-        <img id="form-location-image-preview" class="upload-preview" hidden />
+        <div id="form-location-image-row" class="upload-preview-row" hidden>
+          <img id="form-location-image-preview" class="upload-preview" alt="Location photo preview" />
+          <button id="form-location-image-remove" class="link-btn danger-text" type="button">Remove photo</button>
+        </div>
         <label>Notes <textarea id="form-notes" rows="2"></textarea></label>
+        <p id="item-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
           <button type="submit" class="primary-btn">Save</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
-        <p id="item-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
 
   <!-- Add-on modal (admin only) -->
   <div id="txn-modal" class="modal-overlay" hidden>
-    <div class="modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>Add On Stock</h2>
-      <p id="txn-modal-item"></p>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="txn-modal-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="txn-modal-title">Add On Stock</h2>
+      <p id="txn-modal-item" class="subtitle"></p>
       <form id="txn-form">
-        <label>Your name <input id="txn-name" type="text" required /></label>
-        <label>Employee number <input id="txn-employee-no" type="text" required /></label>
-        <label>Quantity <input id="txn-quantity" type="number" min="1" step="1" required /></label>
+        <div class="form-row">
+          <label>Your name <input id="txn-name" type="text" autocomplete="name" required /></label>
+          <label>Employee number <input id="txn-employee-no" type="text" required /></label>
+        </div>
+        <label>Quantity to add <input id="txn-quantity" type="number" inputmode="numeric" min="1" step="1" required /></label>
         <label>Remarks (optional) <textarea id="txn-remarks" rows="2"></textarea></label>
+        <p id="txn-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
-          <button type="submit" class="primary-btn">Submit</button>
+          <button type="submit" class="primary-btn">Add Stock</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
-        <p id="txn-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
 
   <!-- Move-out cart + checkout modal -->
   <div id="cart-modal" class="modal-overlay" hidden>
-    <div class="modal cart-modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>🛒 Move Out Cart</h2>
-      <p id="cart-empty" class="empty-state" hidden>Your cart is empty. Add items from the dashboard, then come back here to check out.</p>
+    <div class="modal cart-modal" role="dialog" aria-modal="true" aria-labelledby="cart-modal-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="cart-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-cart"/></svg> Move Out Cart</h2>
+      <div id="cart-empty" class="state-block compact" hidden>
+        <svg class="icon state-icon" aria-hidden="true"><use href="#i-cart"/></svg>
+        <p class="state-title">Your cart is empty</p>
+        <p class="state-text">Add items from the dashboard, then come back here to check out.</p>
+        <button class="ghost-btn" type="button" data-close>Browse items</button>
+      </div>
       <div id="cart-lines"></div>
       <form id="checkout-form">
-        <h3>Your details (entered once for everything in the cart)</h3>
+        <h3>Your details <span class="h3-note">— entered once for everything in the cart</span></h3>
         <div class="form-row">
-          <label>Your name <input id="checkout-name" type="text" required /></label>
+          <label>Your name <input id="checkout-name" type="text" autocomplete="name" required /></label>
           <label>Employee number <input id="checkout-employee-no" type="text" required /></label>
         </div>
-        <label>Purpose / event <textarea id="checkout-purpose" rows="2" required></textarea></label>
+        <label>Purpose / event <textarea id="checkout-purpose" rows="2" placeholder="e.g. Education Fair at Sunway Carnival" required></textarea></label>
         <label id="checkout-return-label" hidden>Expected return date for the loanable items <input id="checkout-return-date" type="date" /></label>
         <p id="checkout-loan-note" class="loanable-note" hidden></p>
+        <p id="checkout-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
-          <button id="checkout-submit-btn" type="submit" class="primary-btn">✓ Checkout</button>
+          <button id="checkout-submit-btn" type="submit" class="primary-btn"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg> Checkout</button>
           <button type="button" class="ghost-btn" data-close>Continue Browsing</button>
-          <button id="cart-clear-btn" type="button" class="ghost-btn">Clear Cart</button>
+          <button id="cart-clear-btn" type="button" class="link-btn danger-text push-right">Clear cart</button>
         </div>
-        <p id="checkout-form-error" class="error-text" hidden></p>
       </form>
+    </div>
+  </div>
+
+  <!-- Checkout confirmation -->
+  <div id="success-modal" class="modal-overlay" hidden>
+    <div class="modal success-modal" role="dialog" aria-modal="true" aria-labelledby="success-title" tabindex="-1">
+      <div class="success-icon"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></div>
+      <h2 id="success-title">Checkout recorded</h2>
+      <p id="success-subtitle" class="subtitle"></p>
+      <ul id="success-lines" class="summary-list"></ul>
+      <p id="success-loan-note" class="loanable-note" hidden></p>
+      <div class="form-actions">
+        <button type="button" class="primary-btn" data-close data-autofocus>Done</button>
+        <button id="success-loans-btn" type="button" class="ghost-btn" hidden>View Loan Records</button>
+      </div>
     </div>
   </div>
 
   <!-- Loan records modal -->
   <div id="loans-modal" class="modal-overlay" hidden>
-    <div class="modal loans-modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>📋 Loan Records</h2>
-      <div class="tab-row">
+    <div class="modal loans-modal" role="dialog" aria-modal="true" aria-labelledby="loans-modal-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="loans-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg> Loan Records</h2>
+      <div class="tab-row" role="group" aria-label="Which loans to show">
         <button id="loans-tab-open" class="chip active" type="button">Not Yet Returned</button>
         <button id="loans-tab-all" class="chip" type="button">Borrow History</button>
       </div>
-      <div class="toolbar loans-toolbar">
-        <input id="loans-search" type="search" placeholder="Search item, borrower or event..." />
-        <button id="loans-return-selected-btn" class="primary-btn" type="button">📥 Return Selected</button>
-        <button id="loans-export-btn" class="ghost-btn" type="button">⬇ Export (CSV)</button>
+      <div class="loans-toolbar">
+        <div class="search-box">
+          <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="loans-search" type="search" placeholder="Search item, borrower or event…" aria-label="Search loan records" autocomplete="off" />
+        </div>
+        <button id="loans-return-selected-btn" class="primary-btn" type="button">Return Selected</button>
+        <button id="loans-export-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export (CSV)</button>
       </div>
       <div class="table-scroll">
-        <table class="history-table">
+        <table class="history-table loans-table">
           <thead id="loans-head"></thead>
           <tbody id="loans-body"></tbody>
         </table>
@@ -197,58 +342,62 @@
 
   <!-- Return items modal (one or several loans at once) -->
   <div id="return-modal" class="modal-overlay" hidden>
-    <div class="modal cart-modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>📥 Return Items</h2>
+    <div class="modal cart-modal" role="dialog" aria-modal="true" aria-labelledby="return-modal-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="return-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> Return Items</h2>
       <p class="subtitle">Tick what is being returned now. Lower the quantity if only part of it is coming back.</p>
       <form id="return-form">
         <div id="return-lines"></div>
         <div class="form-row">
-          <label>Returned by (name) <input id="return-name" type="text" required /></label>
+          <label>Returned by (name) <input id="return-name" type="text" autocomplete="name" required /></label>
           <label>Employee number <input id="return-employee-no" type="text" required /></label>
         </div>
         <label>Notes (optional, e.g. condition) <textarea id="return-notes" rows="2"></textarea></label>
+        <p id="return-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
-          <button id="return-submit-btn" type="submit" class="primary-btn">Submit</button>
+          <button id="return-submit-btn" type="submit" class="primary-btn"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg> Record Return</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
-        <p id="return-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
 
   <!-- Edit transaction modal (admin only) -->
   <div id="edit-txn-modal" class="modal-overlay" hidden>
-    <div class="modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>Edit Activity Record</h2>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="edit-txn-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="edit-txn-title">Edit Activity Record</h2>
       <p class="subtitle">Editing this will recalculate the item's current quantity to match. Admin only.</p>
       <form id="edit-txn-form">
-        <label>Type
-          <select id="edit-txn-type">
-            <option value="add">Add On</option>
-            <option value="remove">Move Out</option>
-          </select>
-        </label>
-        <label>Quantity <input id="edit-txn-quantity" type="number" min="1" step="1" required /></label>
-        <label>Name <input id="edit-txn-name" type="text" required /></label>
-        <label>Employee number <input id="edit-txn-employee-no" type="text" required /></label>
+        <div class="form-row">
+          <label>Type
+            <select id="edit-txn-type">
+              <option value="add">Add On</option>
+              <option value="remove">Move Out</option>
+            </select>
+          </label>
+          <label>Quantity <input id="edit-txn-quantity" type="number" inputmode="numeric" min="1" step="1" required /></label>
+        </div>
+        <div class="form-row">
+          <label>Name <input id="edit-txn-name" type="text" required /></label>
+          <label>Employee number <input id="edit-txn-employee-no" type="text" required /></label>
+        </div>
         <label>Remarks <textarea id="edit-txn-remarks" rows="2"></textarea></label>
+        <p id="edit-txn-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
           <button type="submit" class="primary-btn">Save</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
-        <p id="edit-txn-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
 
   <!-- Report issue modal -->
   <div id="report-modal" class="modal-overlay" hidden>
-    <div class="modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>Report an Issue</h2>
-      <p id="report-modal-item"></p>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="report-modal-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="report-modal-title">Report an Issue</h2>
+      <p id="report-modal-item" class="subtitle"></p>
       <form id="report-form">
         <label>Type
           <select id="report-type">
@@ -256,63 +405,87 @@
             <option value="restock">Request restock</option>
           </select>
         </label>
-        <label>Your name <input id="report-name" type="text" required /></label>
-        <label>Employee number <input id="report-employee-no" type="text" required /></label>
-        <label>Quantity affected (optional) <input id="report-quantity" type="number" min="0" step="1" /></label>
+        <div class="form-row">
+          <label>Your name <input id="report-name" type="text" autocomplete="name" required /></label>
+          <label>Employee number <input id="report-employee-no" type="text" required /></label>
+        </div>
+        <label>Quantity affected (optional) <input id="report-quantity" type="number" inputmode="numeric" min="0" step="1" /></label>
         <label>Description <textarea id="report-message" rows="3" required></textarea></label>
+        <p id="report-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
           <button type="submit" class="primary-btn">Submit Report</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
-        <p id="report-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
 
   <!-- Reports panel modal -->
   <div id="reports-panel-modal" class="modal-overlay" hidden>
-    <div class="modal reports-modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>Alerts &amp; Reports</h2>
+    <div class="modal reports-modal" role="dialog" aria-modal="true" aria-labelledby="reports-panel-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="reports-panel-title"><svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg> Alerts &amp; Reports</h2>
       <div id="low-stock-list-panel"></div>
       <div id="overdue-loans-panel"></div>
-      <h3>Open Reports</h3>
+      <h3>Open reports</h3>
       <div id="reports-list"></div>
     </div>
   </div>
 
   <!-- Admin unlock modal -->
   <div id="admin-modal" class="modal-overlay" hidden>
-    <div class="modal admin-modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>Admin Access</h2>
-      <p class="subtitle">Enter the admin password to add, edit, or remove catalog items and resolve reports.</p>
+    <div class="modal admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="admin-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg> Admin Access</h2>
+      <p class="subtitle">Enter the admin password to add stock, add, edit or remove items, and resolve reports.</p>
       <form id="admin-form">
-        <input id="admin-password-input" type="password" placeholder="Admin password" required />
+        <label>Admin password
+          <input id="admin-password-input" type="password" autocomplete="current-password" required data-autofocus />
+        </label>
+        <p id="admin-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
           <button type="submit" class="primary-btn">Unlock</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
-        <p id="admin-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
 
   <!-- Remove item picker modal -->
   <div id="remove-picker-modal" class="modal-overlay" hidden>
-    <div class="modal">
-      <button class="modal-close" data-close>✕</button>
-      <h2>Remove an Item</h2>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="remove-picker-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="remove-picker-title">Remove an Item</h2>
       <p class="subtitle">This permanently deletes the item and its details from the catalog. Admin only.</p>
-      <select id="remove-picker-select"></select>
+      <label>Item to remove
+        <select id="remove-picker-select"></select>
+      </label>
       <div class="form-actions">
-        <button id="remove-picker-confirm" class="danger-btn" type="button">Delete Item</button>
+        <button id="remove-picker-confirm" class="danger-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Delete Item</button>
         <button type="button" class="ghost-btn" data-close>Cancel</button>
       </div>
     </div>
   </div>
 
-  <div id="toast-container"></div>
+  <!-- "Are you sure?" dialog — sits on top of whichever window asked -->
+  <div id="confirm-dialog" class="dialog-overlay" hidden>
+    <div class="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" tabindex="-1">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-message" class="subtitle"></p>
+      <div class="form-actions">
+        <button id="confirm-ok" class="danger-btn" type="button">Confirm</button>
+        <button id="confirm-cancel" class="ghost-btn" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enlarged photo -->
+  <div id="lightbox" class="lightbox" hidden>
+    <button id="lightbox-close" class="lightbox-close" type="button" aria-label="Close photo"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    <img id="lightbox-img" alt="" />
+  </div>
+
+  <div id="toast-container" role="status" aria-live="polite"></div>
 
   <script src="app.js"></script>
 </body>

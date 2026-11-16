@@ -1,7 +1,42 @@
 const { requireAdmin } = require('./_shared/store-auth');
-const { CATEGORIES, getItems, saveItems, genId } = require('./_shared/store-blobs');
+const {
+  CATEGORIES,
+  getItems,
+  saveItems,
+  genId,
+  IMAGE_FIELDS,
+  isInlineImage,
+  saveImage,
+  deleteImage,
+  migrateInlineImages,
+} = require('./_shared/store-blobs');
 
 const REQUIRED_FIELDS = ['name', 'category'];
+
+// Photo fields arrive as: the URL the item already has (unchanged), a freshly
+// picked photo as a data: URL (store it, keep its URL), or empty (removed).
+// Anything else is ignored, so an item can never point at an outside address.
+// Returns the old photo URLs that are no longer used.
+async function applyImages(input, item, previous) {
+  const replaced = [];
+  for (const field of IMAGE_FIELDS) {
+    if (input[field] === undefined) continue;
+    const value = input[field];
+    const old = (previous && previous[field]) || null;
+    if (!value) {
+      item[field] = null;
+      if (old) replaced.push(old);
+    } else if (value === old) {
+      item[field] = old;
+    } else if (isInlineImage(value)) {
+      item[field] = await saveImage(value);
+      if (old) replaced.push(old);
+    } else {
+      item[field] = old;
+    }
+  }
+  return replaced;
+}
 
 function sanitizeItem(input, existing) {
   const item = existing ? { ...existing } : {};
@@ -12,8 +47,6 @@ function sanitizeItem(input, existing) {
   if (input.lowStockThreshold !== undefined) {
     item.lowStockThreshold = Math.max(0, Math.round(Number(input.lowStockThreshold)) || 0);
   }
-  if (input.itemImage !== undefined) item.itemImage = input.itemImage || null;
-  if (input.locationImage !== undefined) item.locationImage = input.locationImage || null;
   if (typeof input.locationText === 'string') item.locationText = input.locationText.trim();
   if (typeof input.notes === 'string') item.notes = input.notes.trim();
   if (typeof input.returnable === 'boolean') item.returnable = input.returnable;
@@ -26,7 +59,12 @@ exports.handler = async (event) => {
   const method = event.httpMethod;
 
   if (method === 'GET') {
-    const items = await getItems();
+    let items = await getItems();
+    try {
+      items = await migrateInlineImages(items);
+    } catch {
+      // Moving old photos out is an optimisation; the list still works without it.
+    }
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -71,6 +109,11 @@ exports.handler = async (event) => {
     };
     newItem.createdAt = now;
     newItem.updatedAt = now;
+    try {
+      await applyImages(body, newItem, null);
+    } catch (err) {
+      return { statusCode: 400, body: JSON.stringify({ error: err.message }) };
+    }
 
     items.push(newItem);
     await saveItems(items);
@@ -95,8 +138,15 @@ exports.handler = async (event) => {
 
     const updated = sanitizeItem(body, items[index]);
     updated.updatedAt = new Date().toISOString();
+    let replacedImages;
+    try {
+      replacedImages = await applyImages(body, updated, items[index]);
+    } catch (err) {
+      return { statusCode: 400, body: JSON.stringify({ error: err.message }) };
+    }
     items[index] = updated;
     await saveItems(items);
+    await Promise.all(replacedImages.map(deleteImage));
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: updated }) };
   }
@@ -117,6 +167,7 @@ exports.handler = async (event) => {
 
     const [removed] = items.splice(index, 1);
     await saveItems(items);
+    await Promise.all(IMAGE_FIELDS.map((field) => deleteImage(removed[field])));
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: removed }) };
   }

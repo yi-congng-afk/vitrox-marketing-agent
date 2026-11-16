@@ -122,9 +122,11 @@ exports.handler = async (event) => {
     item.updatedAt = now;
   }
 
-  await saveItems(items);
-  if (newTransactions.length > 0) await saveTransactions(transactions.concat(newTransactions));
-  if (newLoans.length > 0) await saveLoans(loans.concat(newLoans));
+  await Promise.all([
+    saveItems(items),
+    newTransactions.length > 0 ? saveTransactions(transactions.concat(newTransactions)) : null,
+    newLoans.length > 0 ? saveLoans(loans.concat(newLoans)) : null,
+  ]);
 
   if (crossedLowStock.length > 0) {
     await sendAlertEmail(

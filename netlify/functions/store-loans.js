@@ -103,7 +103,7 @@ exports.handler = async (event) => {
       wanted.set(line.loanId, (wanted.get(line.loanId) || 0) + qty);
     }
 
-    const loans = await getLoans();
+    const [loans, items] = await Promise.all([getLoans(), getItems()]);
     const problems = [];
     for (const [loanId, qty] of wanted) {
       const loan = loans.find((l) => l.id === loanId);
@@ -118,7 +118,6 @@ exports.handler = async (event) => {
     }
     if (problems.length > 0) return { statusCode: 400, body: JSON.stringify({ error: problems.join('; ') }) };
 
-    const items = await getItems();
     const returnedAt = new Date().toISOString();
     const updatedLoans = [];
 
@@ -145,8 +144,7 @@ exports.handler = async (event) => {
       }
     }
 
-    await saveLoans(loans);
-    await saveItems(items);
+    await Promise.all([saveLoans(loans), saveItems(items)]);
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loans: updatedLoans }) };
   }
