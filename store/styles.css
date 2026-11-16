@@ -19,6 +19,18 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute only sets display:none at browser-default priority, so
+   any class that sets display (.ghost-btn, .banner, label, ...) silently wins
+   and the element stays visible. This makes hidden always mean hidden. */
+[hidden] {
+  display: none !important;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -472,3 +484,138 @@ label {
 
 .toast.error { background: var(--danger); }
 .toast.success { background: var(--ok); }
+
+/* --- Cart, checkout, loan records --- */
+
+.card-cart-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.8rem 0.8rem;
+  margin-top: auto;
+  cursor: default;
+}
+.card-cart-row input {
+  width: 64px;
+  padding: 0.4rem 0.5rem;
+}
+.card-cart-row .primary-btn {
+  flex: 1;
+}
+.card-cart-row .muted {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.in-cart-tag {
+  display: inline-block;
+  background: var(--accent);
+  color: white;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-weight: 600;
+  font-size: 0.75rem;
+  margin-left: 0.4rem;
+}
+
+.cart-add-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.cart-add-group input {
+  width: 70px;
+}
+
+.loanable-note {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.82rem;
+  margin: 0.4rem 0 0.85rem;
+}
+
+.cart-modal {
+  max-width: 600px;
+}
+
+.cart-modal h3 {
+  font-size: 0.9rem;
+  margin: 1.1rem 0 0.7rem;
+}
+
+.cart-line, .return-line {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+#return-lines {
+  margin-bottom: 1rem;
+}
+
+.cart-line-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.line-info {
+  flex: 1;
+  min-width: 0;
+}
+.line-info strong {
+  display: block;
+}
+.line-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.line-warning {
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
+.cart-line input[type="number"], .return-line input[type="number"] {
+  width: 72px;
+  flex-shrink: 0;
+}
+.return-line input[type="checkbox"], .history-table input[type="checkbox"] {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.loans-modal {
+  max-width: 980px;
+}
+
+.tab-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.loans-toolbar {
+  padding: 0 0 0.75rem;
+}
+.loans-toolbar input {
+  max-width: 300px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}

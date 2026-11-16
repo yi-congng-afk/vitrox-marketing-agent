@@ -3,9 +3,12 @@ const API = {
   txns: '/.netlify/functions/store-transactions',
   reports: '/.netlify/functions/store-reports',
   loans: '/.netlify/functions/store-loans',
+  checkout: '/.netlify/functions/store-checkout',
 };
 
 const ADMIN_PW_KEY = 'vitroxStoreAdminPw';
+const CART_KEY = 'vitroxStoreCart';
+const USER_KEY = 'vitroxStoreUser';
 
 let items = [];
 let categories = [];
@@ -16,6 +19,35 @@ let pendingAdminAction = null;
 
 const el = (id) => document.getElementById(id);
 
+// Local calendar date (not UTC), so "today" and overdue checks match the wall clock.
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function readStored(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value === null || value === undefined ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStored(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage unavailable (private window etc.) — the cart just won't survive a reload.
+  }
+}
+
+// Cart lines: [{ itemId, quantity }]. Kept in this browser until checkout.
+let cart = (() => {
+  const stored = readStored(CART_KEY, []);
+  return Array.isArray(stored) ? stored.filter((l) => l && l.itemId && l.quantity > 0) : [];
+})();
+
 function isAdminUnlocked() {
   return Boolean(sessionStorage.getItem(ADMIN_PW_KEY));
 }
@@ -25,12 +57,12 @@ function adminHeaders() {
   return pw ? { 'x-admin-password': pw } : {};
 }
 
-function showToast(message, type = '') {
+function showToast(message, type = '', duration = 3500) {
   const toast = document.createElement('div');
   toast.className = `toast ${type}`.trim();
   toast.textContent = message;
   el('toast-container').appendChild(toast);
-  setTimeout(() => toast.remove(), 3500);
+  setTimeout(() => toast.remove(), duration);
 }
 
 function openModal(id) {
@@ -172,25 +204,39 @@ async function loadItems() {
   }
   items = data.items || [];
   categories = data.categories || [];
+
+  // Drop cart lines whose item has since been deleted from the catalog.
+  const stillExists = cart.filter((line) => items.some((i) => i.id === line.itemId));
+  if (stillExists.length !== cart.length) {
+    cart = stillExists;
+    saveCart();
+  }
+
   renderCategoryChips();
   renderGrid();
   renderLowStockBanner();
 }
 
+function setBadge(id, count) {
+  const badge = el(id);
+  badge.hidden = count <= 0;
+  badge.textContent = String(count);
+}
+
 async function loadReportsBadge() {
-  const [reportsRes, loansRes] = await Promise.all([fetch(`${API.reports}?status=open`), fetch(`${API.loans}?status=open`)]);
-  const data = await reportsRes.json();
-  const loanData = await loansRes.json();
-  const today = new Date().toISOString().slice(0, 10);
-  const overdueCount = (loanData.loans || []).filter((l) => l.expectedReturnDate && l.expectedReturnDate < today).length;
-  const count = (data.reports || []).length + overdueCount;
-  const badge = el('reports-badge');
-  if (count > 0) {
-    badge.hidden = false;
-    badge.textContent = String(count);
-  } else {
-    badge.hidden = true;
+  let data, loanData;
+  try {
+    const [reportsRes, loansRes] = await Promise.all([fetch(`${API.reports}?status=open`), fetch(`${API.loans}?status=open`)]);
+    data = await reportsRes.json();
+    loanData = await loansRes.json();
+  } catch {
+    return;
   }
+  const openLoans = loanData.loans || [];
+  const today = todayStr();
+  const overdueCount = openLoans.filter((l) => l.expectedReturnDate && l.expectedReturnDate < today).length;
+  setBadge('reports-badge', (data.reports || []).length + overdueCount);
+  setBadge('loans-badge', openLoans.length);
 }
 
 function availableQty(item) {
@@ -284,12 +330,44 @@ function renderGrid() {
     const available = availableQty(item);
     const low = available <= item.lowStockThreshold;
     const onLoanTag = item.returnable && item.quantityOnLoan > 0 ? `<span class="on-loan-tag">${item.quantityOnLoan} on loan</span>` : '';
-    qtyRow.innerHTML = `<span class="qty-pill ${low ? 'low' : 'ok'}">${available} ${item.unit || 'pcs'} avail.</span>${onLoanTag}`;
+    const inCart = cartQty(item.id);
+    const inCartTag = inCart > 0 ? `<span class="in-cart-tag">🛒 ${inCart} in cart</span>` : '';
+    qtyRow.innerHTML = `<span class="qty-pill ${low ? 'low' : 'ok'}">${available} ${escapeHtml(item.unit || 'pcs')} avail.</span>${onLoanTag}${inCartTag}`;
 
     body.appendChild(tag);
     body.appendChild(name);
     body.appendChild(qtyRow);
     card.appendChild(body);
+
+    // Quick add-to-cart on the card itself; clicks here must not open the detail view.
+    const cartRow = document.createElement('div');
+    cartRow.className = 'card-cart-row';
+    cartRow.addEventListener('click', (e) => e.stopPropagation());
+    if (available > 0) {
+      const qtyInput = document.createElement('input');
+      qtyInput.type = 'number';
+      qtyInput.min = '1';
+      qtyInput.max = String(available);
+      qtyInput.step = '1';
+      qtyInput.value = '1';
+      qtyInput.setAttribute('aria-label', `Quantity of ${item.name} to add to cart`);
+
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'primary-btn';
+      addBtn.textContent = '🛒 Add';
+      addBtn.addEventListener('click', () => addToCart(item.id, qtyInput.value));
+
+      cartRow.appendChild(qtyInput);
+      cartRow.appendChild(addBtn);
+    } else {
+      const none = document.createElement('span');
+      none.className = 'muted';
+      none.textContent = item.returnable && item.quantityOnLoan > 0 ? 'All out on loan' : 'Out of stock';
+      cartRow.appendChild(none);
+    }
+    card.appendChild(cartRow);
+
     grid.appendChild(card);
   });
 }
@@ -323,9 +401,15 @@ async function openDetail(itemId) {
     onLoanRow.hidden = true;
   }
 
-  el('detail-moveout-btn').hidden = Boolean(item.returnable);
-  el('detail-loanout-btn').hidden = !item.returnable;
   el('detail-return-btn').hidden = !item.returnable;
+  el('detail-loanable-note').hidden = !item.returnable;
+
+  const cartRoom = available - cartQty(item.id);
+  el('detail-cart-qty').value = 1;
+  el('detail-cart-qty').max = String(Math.max(cartRoom, 1));
+  el('detail-cart-qty').disabled = cartRoom <= 0;
+  el('detail-cart-btn').disabled = cartRoom <= 0;
+  el('detail-cart-btn').textContent = cartQty(item.id) > 0 ? `🛒 Add to Cart (${cartQty(item.id)} in cart)` : '🛒 Add to Cart';
 
   const itemImg = el('detail-item-image');
   itemImg.src = item.itemImage || '';
@@ -469,49 +553,38 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-el('detail-addon-btn').addEventListener('click', () => requireAdminThen(() => openTxnModal('add')));
-el('detail-moveout-btn').addEventListener('click', () => openTxnModal('remove'));
+// ---------- Add On (admin only) ----------
 
-function openTxnModal(type) {
+el('detail-addon-btn').addEventListener('click', () => requireAdminThen(openAddOnModal));
+
+function openAddOnModal() {
   const item = items.find((i) => i.id === selectedItemId);
   if (!item) return;
-  el('txn-form').dataset.type = type;
-  el('txn-modal-title').textContent = type === 'add' ? 'Add On Stock' : 'Move Out Stock';
   el('txn-modal-item').textContent = `${item.name} — currently ${item.quantity} ${item.unit || 'pcs'}`;
   el('txn-name').value = '';
   el('txn-employee-no').value = '';
   el('txn-quantity').value = '';
   el('txn-remarks').value = '';
-  el('txn-remarks-label').firstChild.textContent = type === 'remove' ? 'Purpose / reason (required) ' : 'Remarks (optional) ';
-  el('txn-remarks').required = type === 'remove';
   el('txn-form-error').hidden = true;
   openModal('txn-modal');
 }
 
 el('txn-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const type = el('txn-form').dataset.type;
   const body = {
     itemId: selectedItemId,
-    type,
+    type: 'add',
     quantity: Number(el('txn-quantity').value),
     name: el('txn-name').value,
     employeeNo: el('txn-employee-no').value,
     remarks: el('txn-remarks').value,
   };
 
-  const res =
-    type === 'add'
-      ? await adminFetch(API.txns, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        })
-      : await fetch(API.txns, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
+  const res = await adminFetch(API.txns, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
   if (!res) return;
   const data = await res.json();
 
@@ -522,118 +595,549 @@ el('txn-form').addEventListener('submit', async (e) => {
   }
 
   closeModal('txn-modal');
-  showToast(type === 'add' ? 'Stock added.' : 'Stock moved out.', 'success');
+  showToast('Stock added.', 'success');
   await loadItems();
   openDetail(selectedItemId);
 });
 
-el('detail-loanout-btn').addEventListener('click', () => {
-  const item = items.find((i) => i.id === selectedItemId);
-  if (!item) return;
-  el('loan-out-item').textContent = `${item.name} — ${availableQty(item)} ${item.unit || 'pcs'} available`;
-  el('loan-out-name').value = '';
-  el('loan-out-employee-no').value = '';
-  el('loan-out-quantity').value = '';
-  el('loan-out-purpose').value = '';
-  el('loan-out-expected-return').value = '';
-  el('loan-out-form-error').hidden = true;
-  openModal('loan-out-modal');
+// ---------- Cart + checkout (the only way stock is moved out) ----------
+
+function saveCart() {
+  writeStored(CART_KEY, cart);
+  setBadge('cart-badge', cart.length);
+}
+
+function cartQty(itemId) {
+  const line = cart.find((l) => l.itemId === itemId);
+  return line ? line.quantity : 0;
+}
+
+function cartLoanableItems() {
+  return cart.map((line) => items.find((i) => i.id === line.itemId)).filter((item) => item && item.returnable);
+}
+
+function addToCart(itemId, rawQuantity) {
+  const item = items.find((i) => i.id === itemId);
+  if (!item) return false;
+  const quantity = Math.round(Number(rawQuantity));
+  if (!quantity || quantity <= 0) {
+    showToast('Enter a quantity of at least 1.', 'error');
+    return false;
+  }
+
+  const unit = item.unit || 'pcs';
+  const available = availableQty(item);
+  const already = cartQty(itemId);
+  if (already + quantity > available) {
+    showToast(
+      already > 0
+        ? `Only ${available} ${unit} of "${item.name}" available — you already have ${already} in your cart.`
+        : `Only ${available} ${unit} of "${item.name}" available.`,
+      'error'
+    );
+    return false;
+  }
+
+  const line = cart.find((l) => l.itemId === itemId);
+  if (line) line.quantity += quantity;
+  else cart.push({ itemId, quantity });
+  saveCart();
+  renderGrid();
+  showToast(`Added ${quantity} × ${item.name} to cart.`, 'success');
+  return true;
+}
+
+el('detail-cart-btn').addEventListener('click', () => {
+  if (addToCart(selectedItemId, el('detail-cart-qty').value)) openDetail(selectedItemId);
 });
 
-el('loan-out-form').addEventListener('submit', async (e) => {
+function renderCart() {
+  const container = el('cart-lines');
+  container.innerHTML = '';
+  el('cart-empty').hidden = cart.length > 0;
+  el('checkout-form').hidden = cart.length === 0;
+
+  cart.forEach((line) => {
+    const item = items.find((i) => i.id === line.itemId);
+    if (!item) return;
+    const available = availableQty(item);
+    const unit = item.unit || 'pcs';
+
+    const row = document.createElement('div');
+    row.className = 'cart-line';
+
+    let thumb;
+    if (item.itemImage) {
+      thumb = document.createElement('img');
+      thumb.src = item.itemImage;
+      thumb.alt = '';
+    } else {
+      thumb = document.createElement('div');
+      thumb.textContent = '📦';
+    }
+    thumb.className = 'cart-line-thumb';
+
+    const info = document.createElement('div');
+    info.className = 'line-info';
+    const title = document.createElement('strong');
+    title.textContent = item.name;
+    info.appendChild(title);
+    const meta = document.createElement('div');
+    meta.className = 'line-meta';
+    meta.textContent = `${available} ${unit} available`;
+    if (item.returnable) {
+      const tag = document.createElement('span');
+      tag.className = 'on-loan-tag';
+      tag.textContent = '↩ Loan — must return';
+      meta.appendChild(tag);
+    }
+    info.appendChild(meta);
+    if (line.quantity > available) {
+      const warning = document.createElement('div');
+      warning.className = 'line-warning';
+      warning.textContent =
+        available > 0 ? `Only ${available} left — lower the quantity.` : 'No longer available — remove this line.';
+      info.appendChild(warning);
+    }
+
+    const qtyInput = document.createElement('input');
+    qtyInput.type = 'number';
+    qtyInput.min = '1';
+    qtyInput.max = String(Math.max(available, 1));
+    qtyInput.step = '1';
+    qtyInput.value = String(line.quantity);
+    qtyInput.setAttribute('aria-label', `Quantity of ${item.name}`);
+    qtyInput.addEventListener('change', () => {
+      let next = Math.round(Number(qtyInput.value));
+      if (!next || next < 1) next = 1;
+      if (available > 0 && next > available) next = available;
+      line.quantity = next;
+      saveCart();
+      renderCart();
+      renderGrid();
+    });
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'ghost-btn';
+    removeBtn.textContent = '✕';
+    removeBtn.title = `Remove ${item.name} from cart`;
+    removeBtn.addEventListener('click', () => {
+      cart = cart.filter((l) => l !== line);
+      saveCart();
+      renderCart();
+      renderGrid();
+    });
+
+    row.appendChild(thumb);
+    row.appendChild(info);
+    row.appendChild(qtyInput);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  });
+
+  const loanable = cartLoanableItems();
+  const hasLoanable = loanable.length > 0;
+  el('checkout-return-label').hidden = !hasLoanable;
+  el('checkout-return-date').required = hasLoanable;
+  el('checkout-loan-note').hidden = !hasLoanable;
+  el('checkout-loan-note').textContent = hasLoanable
+    ? `↩ ${loanable.map((i) => i.name).join(', ')} will be recorded as on loan under your name until returned (Loan Records → Return).`
+    : '';
+}
+
+function openCart() {
+  const savedUser = readStored(USER_KEY, {}) || {};
+  if (!el('checkout-name').value) el('checkout-name').value = savedUser.name || '';
+  if (!el('checkout-employee-no').value) el('checkout-employee-no').value = savedUser.employeeNo || '';
+  el('checkout-return-date').min = todayStr();
+  el('checkout-form-error').hidden = true;
+  renderCart();
+  openModal('cart-modal');
+}
+
+el('cart-btn').addEventListener('click', openCart);
+
+el('cart-clear-btn').addEventListener('click', () => {
+  if (!confirm('Remove everything from the cart?')) return;
+  cart = [];
+  saveCart();
+  renderCart();
+  renderGrid();
+});
+
+el('checkout-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (cart.length === 0) return;
+
+  const errorEl = el('checkout-form-error');
+  const submitBtn = el('checkout-submit-btn');
+  const hasLoanable = cartLoanableItems().length > 0;
   const body = {
-    itemId: selectedItemId,
-    quantity: Number(el('loan-out-quantity').value),
-    name: el('loan-out-name').value,
-    employeeNo: el('loan-out-employee-no').value,
-    purpose: el('loan-out-purpose').value,
-    expectedReturnDate: el('loan-out-expected-return').value || null,
+    name: el('checkout-name').value,
+    employeeNo: el('checkout-employee-no').value,
+    purpose: el('checkout-purpose').value,
+    expectedReturnDate: hasLoanable ? el('checkout-return-date').value || null : null,
+    lines: cart.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
   };
 
-  const res = await fetch(API.loans, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
+  errorEl.hidden = true;
+  submitBtn.disabled = true;
+  let res, data;
+  try {
+    res = await fetch(API.checkout, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    data = await res.json();
+  } catch {
+    submitBtn.disabled = false;
+    errorEl.textContent = 'Could not reach the store server — nothing was recorded. Please try again.';
+    errorEl.hidden = false;
+    return;
+  }
+  submitBtn.disabled = false;
 
   if (!res.ok) {
-    el('loan-out-form-error').textContent = data.error || 'Something went wrong.';
-    el('loan-out-form-error').hidden = false;
+    errorEl.textContent = data.error || 'Something went wrong.';
+    errorEl.hidden = false;
+    // Stock may have changed since the cart was filled — refresh so the lines show it.
+    await loadItems();
+    renderCart();
     return;
   }
 
-  closeModal('loan-out-modal');
-  showToast('Stock moved out.', 'success');
+  writeStored(USER_KEY, { name: body.name.trim(), employeeNo: body.employeeNo.trim() });
+  const lineCount = cart.length;
+  const loanCount = (data.loans || []).length;
+  cart = [];
+  saveCart();
+  el('checkout-purpose').value = '';
+  el('checkout-return-date').value = '';
+  closeModal('cart-modal');
+  showToast(
+    loanCount > 0
+      ? `Checked out ${lineCount} item${lineCount > 1 ? 's' : ''}. ${loanCount} loanable item${loanCount > 1 ? 's are' : ' is'} now on loan under your name — please return by ${body.expectedReturnDate}.`
+      : `Checked out ${lineCount} item${lineCount > 1 ? 's' : ''}.`,
+    'success',
+    loanCount > 0 ? 7000 : 3500
+  );
   await loadItems();
-  openDetail(selectedItemId);
+  loadReportsBadge();
 });
 
-let openLoansForReturn = [];
+// ---------- Returns (one or several loans in a single submit) ----------
+
+let returnOrigin = 'detail';
+
+function loanOutstanding(loan) {
+  return loan.quantity - loan.quantityReturned;
+}
+
+function isOverdue(loan) {
+  return loan.status === 'open' && Boolean(loan.expectedReturnDate) && loan.expectedReturnDate < todayStr();
+}
+
+function openReturnModal(loans, { origin, checkAll }) {
+  returnOrigin = origin;
+  const container = el('return-lines');
+  container.innerHTML = '';
+
+  loans.forEach((loan) => {
+    const outstanding = loanOutstanding(loan);
+    const row = document.createElement('label');
+    row.className = 'return-line';
+
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = checkAll || loans.length === 1;
+    check.dataset.loanId = loan.id;
+
+    const info = document.createElement('div');
+    info.className = 'line-info';
+    const title = document.createElement('strong');
+    title.textContent = `${loan.itemName} — ${outstanding} not returned`;
+    const meta = document.createElement('div');
+    meta.className = 'line-meta';
+    const due = loan.expectedReturnDate ? ` · due ${loan.expectedReturnDate}` : '';
+    meta.textContent = `Borrowed by ${loan.name} (${loan.employeeNo}) · ${loan.purpose}${due}`;
+    info.appendChild(title);
+    info.appendChild(meta);
+
+    const qtyInput = document.createElement('input');
+    qtyInput.type = 'number';
+    qtyInput.min = '1';
+    qtyInput.max = String(outstanding);
+    qtyInput.step = '1';
+    qtyInput.value = String(outstanding);
+    qtyInput.setAttribute('aria-label', `Quantity of ${loan.itemName} being returned`);
+
+    row.appendChild(check);
+    row.appendChild(info);
+    row.appendChild(qtyInput);
+    container.appendChild(row);
+  });
+
+  const savedUser = readStored(USER_KEY, {}) || {};
+  el('return-name').value = savedUser.name || '';
+  el('return-employee-no').value = savedUser.employeeNo || '';
+  el('return-notes').value = '';
+  el('return-form-error').hidden = true;
+  openModal('return-modal');
+}
 
 el('detail-return-btn').addEventListener('click', async () => {
   const item = items.find((i) => i.id === selectedItemId);
   if (!item || !item.returnable) return;
 
-  const res = await fetch(`${API.loans}?itemId=${encodeURIComponent(item.id)}&status=open`);
-  const data = await res.json();
-  openLoansForReturn = data.loans || [];
-
-  const select = el('return-loan-select');
-  if (openLoansForReturn.length === 0) {
-    select.innerHTML = '<option value="">No open loans for this item</option>';
-  } else {
-    select.innerHTML = openLoansForReturn
-      .map((l) => {
-        const outstanding = l.quantity - l.quantityReturned;
-        const due = l.expectedReturnDate ? `, due ${l.expectedReturnDate}` : '';
-        return `<option value="${l.id}">${escapeHtml(l.name)} (${escapeHtml(l.employeeNo)}) — ${outstanding} outstanding — ${escapeHtml(l.purpose)}${due}</option>`;
-      })
-      .join('');
+  let data;
+  try {
+    const res = await fetch(`${API.loans}?itemId=${encodeURIComponent(item.id)}&status=open`);
+    data = await res.json();
+  } catch {
+    showToast('Could not load the loans for this item.', 'error');
+    return;
   }
-
-  el('return-quantity').value = '';
-  el('return-name').value = '';
-  el('return-employee-no').value = '';
-  el('return-notes').value = '';
-  el('return-form-error').hidden = true;
-  openModal('return-modal');
+  const openLoans = data.loans || [];
+  if (openLoans.length === 0) {
+    showToast(`Nothing to return — no "${item.name}" is out on loan right now.`);
+    return;
+  }
+  openReturnModal(openLoans, { origin: 'detail', checkAll: false });
 });
 
 el('return-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const loanId = el('return-loan-select').value;
-  if (!loanId) {
-    el('return-form-error').textContent = 'No open loan selected.';
-    el('return-form-error').hidden = false;
+  const errorEl = el('return-form-error');
+  const showError = (message) => {
+    errorEl.textContent = message;
+    errorEl.hidden = false;
+  };
+
+  const returns = [];
+  el('return-lines')
+    .querySelectorAll('.return-line')
+    .forEach((row) => {
+      const check = row.querySelector('input[type="checkbox"]');
+      if (!check.checked) return;
+      returns.push({
+        loanId: check.dataset.loanId,
+        quantity: Math.round(Number(row.querySelector('input[type="number"]').value)),
+      });
+    });
+
+  if (returns.length === 0) {
+    showError('Tick at least one item that is being returned.');
+    return;
+  }
+  if (returns.some((r) => !r.quantity || r.quantity <= 0)) {
+    showError('Every ticked item needs a return quantity of at least 1.');
     return;
   }
 
   const body = {
-    quantity: Number(el('return-quantity').value),
+    returns,
     name: el('return-name').value,
     employeeNo: el('return-employee-no').value,
     notes: el('return-notes').value,
   };
 
-  const res = await fetch(`${API.loans}?id=${encodeURIComponent(loanId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
+  const submitBtn = el('return-submit-btn');
+  errorEl.hidden = true;
+  submitBtn.disabled = true;
+  let res, data;
+  try {
+    res = await fetch(API.loans, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    data = await res.json();
+  } catch {
+    submitBtn.disabled = false;
+    showError('Could not reach the store server — nothing was recorded. Please try again.');
+    return;
+  }
+  submitBtn.disabled = false;
 
   if (!res.ok) {
-    el('return-form-error').textContent = data.error || 'Something went wrong.';
-    el('return-form-error').hidden = false;
+    showError(data.error || 'Something went wrong.');
     return;
   }
 
   closeModal('return-modal');
-  showToast('Return recorded.', 'success');
+  showToast(`Return recorded for ${returns.length} item${returns.length > 1 ? 's' : ''}.`, 'success');
   await loadItems();
-  openDetail(selectedItemId);
+  loadReportsBadge();
+  if (returnOrigin === 'loans') openLoansPanel();
+  else openDetail(selectedItemId);
+});
+
+// ---------- Loan records: what is still out, and who has borrowed what ----------
+
+let allLoans = [];
+let loansTab = 'open';
+let loansSearch = '';
+const selectedLoanIds = new Set();
+
+async function openLoansPanel() {
+  try {
+    const res = await fetch(API.loans);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || String(res.status));
+    allLoans = data.loans || [];
+  } catch {
+    showToast('Could not load loan records. Please try again.', 'error');
+    return;
+  }
+  selectedLoanIds.clear();
+  setBadge('loans-badge', allLoans.filter((l) => l.status === 'open').length);
+  renderLoansPanel();
+  openModal('loans-modal');
+}
+
+function filteredLoans() {
+  const term = loansSearch.trim().toLowerCase();
+  return allLoans.filter((loan) => {
+    if (loansTab === 'open' && loan.status !== 'open') return false;
+    if (!term) return true;
+    return [loan.itemName, loan.name, loan.employeeNo, loan.purpose].some((value) =>
+      String(value || '').toLowerCase().includes(term)
+    );
+  });
+}
+
+function loanStatusHtml(loan) {
+  if (loan.status === 'returned') {
+    const returns = loan.returns || [];
+    const last = returns[returns.length - 1];
+    const detail = last ? ` ${new Date(last.returnedAt).toLocaleDateString()} by ${escapeHtml(last.name)}` : '';
+    return `<span class="qty-pill ok">Returned</span>${detail}`;
+  }
+  const overdue = isOverdue(loan) ? ' <span class="qty-pill low">Overdue</span>' : '';
+  return `<span class="on-loan-tag" style="margin-left:0">${loanOutstanding(loan)} not returned</span>${overdue}`;
+}
+
+function updateReturnSelectedButton() {
+  const count = selectedLoanIds.size;
+  el('loans-return-selected-btn').textContent = count > 0 ? `📥 Return Selected (${count})` : '📥 Return Selected';
+}
+
+function renderLoansPanel() {
+  const openTab = loansTab === 'open';
+  el('loans-tab-open').classList.toggle('active', openTab);
+  el('loans-tab-all').classList.toggle('active', !openTab);
+  el('loans-return-selected-btn').hidden = !openTab;
+
+  el('loans-head').innerHTML = openTab
+    ? '<tr><th></th><th>Item</th><th>Not returned</th><th>Borrowed by</th><th>Purpose / event</th><th>Moved out</th><th>Due back</th><th></th></tr>'
+    : '<tr><th>Item</th><th>Qty</th><th>Borrowed by</th><th>Purpose / event</th><th>Moved out</th><th>Due back</th><th>Status</th></tr>';
+
+  const list = filteredLoans();
+  const body = el('loans-body');
+  body.innerHTML = '';
+
+  const empty = el('loans-empty');
+  empty.hidden = list.length > 0;
+  if (loansSearch.trim()) empty.textContent = 'No loan records match your search.';
+  else empty.textContent = openTab ? 'Everything has been returned — nothing is out on loan.' : 'No loan records yet.';
+
+  list.forEach((loan) => {
+    const row = document.createElement('tr');
+    const outstanding = loanOutstanding(loan);
+    const borrower = `${escapeHtml(loan.name)} (${escapeHtml(loan.employeeNo)})`;
+    const movedOut = new Date(loan.loanedAt).toLocaleDateString();
+    const due = loan.expectedReturnDate ? escapeHtml(loan.expectedReturnDate) : '—';
+
+    if (openTab) {
+      const checkCell = document.createElement('td');
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = selectedLoanIds.has(loan.id);
+      check.setAttribute('aria-label', `Select ${loan.itemName} borrowed by ${loan.name}`);
+      check.addEventListener('change', () => {
+        if (check.checked) selectedLoanIds.add(loan.id);
+        else selectedLoanIds.delete(loan.id);
+        updateReturnSelectedButton();
+      });
+      checkCell.appendChild(check);
+      row.appendChild(checkCell);
+
+      const partial = loan.quantityReturned > 0 ? ` of ${loan.quantity}` : '';
+      const overdue = isOverdue(loan) ? ' <span class="qty-pill low">Overdue</span>' : '';
+      row.insertAdjacentHTML(
+        'beforeend',
+        `<td>${escapeHtml(loan.itemName)}</td><td>${outstanding}${partial}</td><td>${borrower}</td><td>${escapeHtml(loan.purpose)}</td><td>${movedOut}</td><td>${due}${overdue}</td>`
+      );
+
+      const actionCell = document.createElement('td');
+      const returnBtn = document.createElement('button');
+      returnBtn.type = 'button';
+      returnBtn.className = 'ghost-btn';
+      returnBtn.textContent = '📥 Return';
+      returnBtn.addEventListener('click', () => openReturnModal([loan], { origin: 'loans', checkAll: true }));
+      actionCell.appendChild(returnBtn);
+      row.appendChild(actionCell);
+    } else {
+      row.innerHTML = `<td>${escapeHtml(loan.itemName)}</td><td>${loan.quantity}</td><td>${borrower}</td><td>${escapeHtml(loan.purpose)}</td><td>${movedOut}</td><td>${due}</td><td>${loanStatusHtml(loan)}</td>`;
+    }
+
+    body.appendChild(row);
+  });
+
+  updateReturnSelectedButton();
+}
+
+el('loans-btn').addEventListener('click', openLoansPanel);
+
+el('loans-tab-open').addEventListener('click', () => {
+  loansTab = 'open';
+  renderLoansPanel();
+});
+
+el('loans-tab-all').addEventListener('click', () => {
+  loansTab = 'all';
+  renderLoansPanel();
+});
+
+el('loans-search').addEventListener('input', (e) => {
+  loansSearch = e.target.value;
+  renderLoansPanel();
+});
+
+el('loans-return-selected-btn').addEventListener('click', () => {
+  const selected = allLoans.filter((loan) => loan.status === 'open' && selectedLoanIds.has(loan.id));
+  if (selected.length === 0) {
+    showToast('Tick the items being returned first.', 'error');
+    return;
+  }
+  openReturnModal(selected, { origin: 'loans', checkAll: true });
+});
+
+el('loans-export-btn').addEventListener('click', () => {
+  const rows = [
+    ['Item', 'Quantity', 'Returned', 'Not Returned', 'Borrowed By', 'Employee No', 'Purpose', 'Moved Out', 'Due Back', 'Status', 'Last Returned On', 'Last Returned By'],
+    ...allLoans.map((loan) => {
+      const returns = loan.returns || [];
+      const last = returns[returns.length - 1];
+      return [
+        loan.itemName,
+        loan.quantity,
+        loan.quantityReturned,
+        loanOutstanding(loan),
+        loan.name,
+        loan.employeeNo,
+        loan.purpose,
+        new Date(loan.loanedAt).toLocaleString(),
+        loan.expectedReturnDate || '',
+        loan.status === 'returned' ? 'Returned' : isOverdue(loan) ? 'Overdue' : 'Not returned',
+        last ? new Date(last.returnedAt).toLocaleString() : '',
+        last ? `${last.name} (${last.employeeNo})` : '',
+      ];
+    }),
+  ];
+  downloadCsv(`vitrox-store-loan-records-${todayStr()}.csv`, rows);
 });
 
 el('detail-report-btn').addEventListener('click', () => {
@@ -694,7 +1198,7 @@ async function openReportsPanel() {
 
   const loanRes = await fetch(`${API.loans}?status=open`);
   const loanData = await loanRes.json();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr();
   const overdue = (loanData.loans || []).filter((l) => l.expectedReturnDate && l.expectedReturnDate < today);
   const overduePanel = el('overdue-loans-panel');
   overduePanel.innerHTML = overdue.length
@@ -949,5 +1453,6 @@ el('export-txns-btn').addEventListener('click', async () => {
 });
 
 updateAdminUI();
+setBadge('cart-badge', cart.length);
 loadItems();
 loadReportsBadge();

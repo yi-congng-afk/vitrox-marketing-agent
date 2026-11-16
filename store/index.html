@@ -13,6 +13,12 @@
       <h1>🏬 Store Room Dashboard</h1>
     </div>
     <div class="topbar-right">
+      <button id="cart-btn" class="primary-btn" type="button">
+        🛒 Cart <span id="cart-badge" class="badge" hidden>0</span>
+      </button>
+      <button id="loans-btn" class="icon-btn" type="button">
+        📋 Loan Records <span id="loans-badge" class="badge" hidden>0</span>
+      </button>
       <button id="reports-btn" class="icon-btn" type="button">
         🔔 Alerts <span id="reports-badge" class="badge" hidden>0</span>
       </button>
@@ -60,12 +66,15 @@
           <p class="detail-qty" id="detail-on-loan-row" hidden>On loan: <strong id="detail-on-loan"></strong> <span id="detail-unit-2"></span></p>
           <p id="detail-low-stock" class="low-stock-tag" hidden>⚠ Low stock</p>
           <p id="detail-notes" class="detail-notes"></p>
+          <p id="detail-loanable-note" class="loanable-note" hidden>↩ Loanable item — it stays recorded under the borrower's name until it is returned.</p>
 
           <div class="detail-actions">
-            <button id="detail-addon-btn" class="primary-btn" type="button">+ Add On</button>
-            <button id="detail-moveout-btn" class="danger-btn" type="button">− Move Out</button>
-            <button id="detail-loanout-btn" class="danger-btn" type="button" hidden>− Move Out</button>
+            <span class="cart-add-group">
+              <input id="detail-cart-qty" type="number" min="1" step="1" value="1" aria-label="Quantity to move out" />
+              <button id="detail-cart-btn" class="primary-btn" type="button">🛒 Add to Cart</button>
+            </span>
             <button id="detail-return-btn" class="ghost-btn" type="button" hidden>📥 Return Items</button>
+            <button id="detail-addon-btn" class="ghost-btn" type="button">+ Add On</button>
             <button id="detail-report-btn" class="ghost-btn" type="button">🚩 Report Issue</button>
             <button id="detail-edit-btn" class="ghost-btn admin-only" type="button" hidden>✎ Edit</button>
             <button id="detail-delete-btn" class="ghost-btn admin-only" type="button" hidden>🗑 Delete</button>
@@ -115,17 +124,17 @@
     </div>
   </div>
 
-  <!-- Add-on / Move-out modal -->
+  <!-- Add-on modal (admin only) -->
   <div id="txn-modal" class="modal-overlay" hidden>
     <div class="modal">
       <button class="modal-close" data-close>✕</button>
-      <h2 id="txn-modal-title">Add On Stock</h2>
+      <h2>Add On Stock</h2>
       <p id="txn-modal-item"></p>
       <form id="txn-form">
         <label>Your name <input id="txn-name" type="text" required /></label>
         <label>Employee number <input id="txn-employee-no" type="text" required /></label>
         <label>Quantity <input id="txn-quantity" type="number" min="1" step="1" required /></label>
-        <label id="txn-remarks-label">Remarks / purpose <textarea id="txn-remarks" rows="2"></textarea></label>
+        <label>Remarks (optional) <textarea id="txn-remarks" rows="2"></textarea></label>
         <div class="form-actions">
           <button type="submit" class="primary-btn">Submit</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
@@ -135,42 +144,71 @@
     </div>
   </div>
 
-  <!-- Loan out modal -->
-  <div id="loan-out-modal" class="modal-overlay" hidden>
-    <div class="modal">
+  <!-- Move-out cart + checkout modal -->
+  <div id="cart-modal" class="modal-overlay" hidden>
+    <div class="modal cart-modal">
       <button class="modal-close" data-close>✕</button>
-      <h2>Move Out</h2>
-      <p id="loan-out-item"></p>
-      <form id="loan-out-form">
-        <label>Your name <input id="loan-out-name" type="text" required /></label>
-        <label>Employee number <input id="loan-out-employee-no" type="text" required /></label>
-        <label>Quantity <input id="loan-out-quantity" type="number" min="1" step="1" required /></label>
-        <label>Purpose (e.g. which event) <textarea id="loan-out-purpose" rows="2" required></textarea></label>
-        <label>Expected return date (optional) <input id="loan-out-expected-return" type="date" /></label>
-        <div class="form-actions">
-          <button type="submit" class="primary-btn">Submit</button>
-          <button type="button" class="ghost-btn" data-close>Cancel</button>
+      <h2>🛒 Move Out Cart</h2>
+      <p id="cart-empty" class="empty-state" hidden>Your cart is empty. Add items from the dashboard, then come back here to check out.</p>
+      <div id="cart-lines"></div>
+      <form id="checkout-form">
+        <h3>Your details (entered once for everything in the cart)</h3>
+        <div class="form-row">
+          <label>Your name <input id="checkout-name" type="text" required /></label>
+          <label>Employee number <input id="checkout-employee-no" type="text" required /></label>
         </div>
-        <p id="loan-out-form-error" class="error-text" hidden></p>
+        <label>Purpose / event <textarea id="checkout-purpose" rows="2" required></textarea></label>
+        <label id="checkout-return-label" hidden>Expected return date for the loanable items <input id="checkout-return-date" type="date" /></label>
+        <p id="checkout-loan-note" class="loanable-note" hidden></p>
+        <div class="form-actions">
+          <button id="checkout-submit-btn" type="submit" class="primary-btn">✓ Checkout</button>
+          <button type="button" class="ghost-btn" data-close>Continue Browsing</button>
+          <button id="cart-clear-btn" type="button" class="ghost-btn">Clear Cart</button>
+        </div>
+        <p id="checkout-form-error" class="error-text" hidden></p>
       </form>
     </div>
   </div>
 
-  <!-- Return items modal -->
-  <div id="return-modal" class="modal-overlay" hidden>
-    <div class="modal">
+  <!-- Loan records modal -->
+  <div id="loans-modal" class="modal-overlay" hidden>
+    <div class="modal loans-modal">
       <button class="modal-close" data-close>✕</button>
-      <h2>Return Items</h2>
-      <label>Which loan is this returning?
-        <select id="return-loan-select"></select>
-      </label>
+      <h2>📋 Loan Records</h2>
+      <div class="tab-row">
+        <button id="loans-tab-open" class="chip active" type="button">Not Yet Returned</button>
+        <button id="loans-tab-all" class="chip" type="button">Borrow History</button>
+      </div>
+      <div class="toolbar loans-toolbar">
+        <input id="loans-search" type="search" placeholder="Search item, borrower or event..." />
+        <button id="loans-return-selected-btn" class="primary-btn" type="button">📥 Return Selected</button>
+        <button id="loans-export-btn" class="ghost-btn" type="button">⬇ Export (CSV)</button>
+      </div>
+      <div class="table-scroll">
+        <table class="history-table">
+          <thead id="loans-head"></thead>
+          <tbody id="loans-body"></tbody>
+        </table>
+      </div>
+      <p id="loans-empty" class="empty-state" hidden></p>
+    </div>
+  </div>
+
+  <!-- Return items modal (one or several loans at once) -->
+  <div id="return-modal" class="modal-overlay" hidden>
+    <div class="modal cart-modal">
+      <button class="modal-close" data-close>✕</button>
+      <h2>📥 Return Items</h2>
+      <p class="subtitle">Tick what is being returned now. Lower the quantity if only part of it is coming back.</p>
       <form id="return-form">
-        <label>Quantity being returned now <input id="return-quantity" type="number" min="1" step="1" required /></label>
-        <label>Your name <input id="return-name" type="text" required /></label>
-        <label>Employee number <input id="return-employee-no" type="text" required /></label>
+        <div id="return-lines"></div>
+        <div class="form-row">
+          <label>Returned by (name) <input id="return-name" type="text" required /></label>
+          <label>Employee number <input id="return-employee-no" type="text" required /></label>
+        </div>
         <label>Notes (optional, e.g. condition) <textarea id="return-notes" rows="2"></textarea></label>
         <div class="form-actions">
-          <button type="submit" class="primary-btn">Submit</button>
+          <button id="return-submit-btn" type="submit" class="primary-btn">Submit</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
         <p id="return-form-error" class="error-text" hidden></p>

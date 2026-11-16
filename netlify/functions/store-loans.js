@@ -74,7 +74,6 @@ exports.handler = async (event) => {
 
   if (method === 'PATCH') {
     const id = event.queryStringParameters && event.queryStringParameters.id;
-    if (!id) return { statusCode: 400, body: JSON.stringify({ error: 'Missing id query parameter' }) };
 
     let body;
     try {
@@ -83,46 +82,73 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
     }
 
-    const { quantity, name, employeeNo, notes } = body;
-    const qty = Math.round(Number(quantity));
-    if (!qty || qty <= 0) return { statusCode: 400, body: JSON.stringify({ error: 'quantity must be a positive number' }) };
+    // Either one loan (?id=...&quantity) or several at once (body.returns), so a
+    // person bringing back everything from an event enters their details once.
+    const { name, employeeNo, notes } = body;
+    const rawLines = id ? [{ loanId: id, quantity: body.quantity }] : body.returns;
+    if (!Array.isArray(rawLines) || rawLines.length === 0) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Select at least one loan to return' }) };
+    }
     if (!name || !String(name).trim()) return { statusCode: 400, body: JSON.stringify({ error: 'Name is required' }) };
     if (!employeeNo || !String(employeeNo).trim()) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Employee number is required' }) };
     }
 
+    const wanted = new Map();
+    for (const line of rawLines) {
+      const qty = Math.round(Number(line && line.quantity));
+      if (!line || !line.loanId || !qty || qty <= 0) {
+        return { statusCode: 400, body: JSON.stringify({ error: 'quantity must be a positive number' }) };
+      }
+      wanted.set(line.loanId, (wanted.get(line.loanId) || 0) + qty);
+    }
+
     const loans = await getLoans();
-    const index = loans.findIndex((l) => l.id === id);
-    if (index === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Loan not found' }) };
-
-    const loan = loans[index];
-    const outstanding = loan.quantity - loan.quantityReturned;
-    if (qty > outstanding) {
-      return { statusCode: 400, body: JSON.stringify({ error: `Only ${outstanding} still outstanding on this loan` }) };
+    const problems = [];
+    for (const [loanId, qty] of wanted) {
+      const loan = loans.find((l) => l.id === loanId);
+      if (!loan) {
+        problems.push('A selected loan record no longer exists');
+        continue;
+      }
+      const outstanding = loan.quantity - loan.quantityReturned;
+      if (qty > outstanding) {
+        problems.push(`"${loan.itemName}": only ${outstanding} still outstanding on this loan`);
+      }
     }
-
-    loan.returns.push({
-      quantity: qty,
-      name: String(name).trim(),
-      employeeNo: String(employeeNo).trim(),
-      notes: notes ? String(notes).trim() : '',
-      returnedAt: new Date().toISOString(),
-    });
-    loan.quantityReturned += qty;
-    if (loan.quantityReturned >= loan.quantity) {
-      loan.status = 'returned';
-    }
-    await saveLoans(loans);
+    if (problems.length > 0) return { statusCode: 400, body: JSON.stringify({ error: problems.join('; ') }) };
 
     const items = await getItems();
-    const item = items.find((i) => i.id === loan.itemId);
-    if (item) {
-      item.quantityOnLoan = Math.max(0, (item.quantityOnLoan || 0) - qty);
-      item.updatedAt = new Date().toISOString();
-      await saveItems(items);
+    const returnedAt = new Date().toISOString();
+    const updatedLoans = [];
+
+    for (const [loanId, qty] of wanted) {
+      const loan = loans.find((l) => l.id === loanId);
+      if (!Array.isArray(loan.returns)) loan.returns = [];
+      loan.returns.push({
+        quantity: qty,
+        name: String(name).trim(),
+        employeeNo: String(employeeNo).trim(),
+        notes: notes ? String(notes).trim() : '',
+        returnedAt,
+      });
+      loan.quantityReturned += qty;
+      if (loan.quantityReturned >= loan.quantity) {
+        loan.status = 'returned';
+      }
+      updatedLoans.push(loan);
+
+      const item = items.find((i) => i.id === loan.itemId);
+      if (item) {
+        item.quantityOnLoan = Math.max(0, (item.quantityOnLoan || 0) - qty);
+        item.updatedAt = returnedAt;
+      }
     }
 
-    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loan, item }) };
+    await saveLoans(loans);
+    await saveItems(items);
+
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loans: updatedLoans }) };
   }
 
   if (method === 'DELETE') {
