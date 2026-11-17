@@ -417,6 +417,91 @@ label {
   border-color: var(--accent);
   color: var(--accent);
 }
+.account-btn .btn-label {
+  display: inline-block;
+  max-width: 11ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- ViTrox sign-in ---------- */
+
+/* Where Google draws its own "Sign in with Google" button. */
+.google-btn-slot {
+  display: flex;
+  justify-content: center;
+  min-height: 44px;
+  margin: 0.5rem 0 0.25rem;
+  color-scheme: light;
+}
+.google-btn-slot:empty { display: none; }
+
+.fine-print {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 0.85rem;
+}
+
+.account-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  margin-bottom: 0.85rem;
+}
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.account-card-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-card-text span { font-size: 0.85rem; color: var(--text-muted); }
+
+/* "Recorded as …" / "Sign in to skip typing" line above the name fields. */
+.person-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 0.85rem;
+}
+.person-note .icon { margin-top: 0.15rem; flex-shrink: 0; }
+.person-note.is-signed-in {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.75rem;
+}
+.person-note .link-btn {
+  display: inline;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.person-note .link-btn:hover:not(:disabled) { background: none; text-decoration-thickness: 2px; }
+
+/* Sign-in required and nobody signed in: only the sign-in screen is shown. */
+.signin-gate { padding-top: 4rem; }
+.signin-gate .state-text { max-width: 46ch; }
+body.gated .page > *:not(#signin-gate) { display: none !important; }
+body.gated #loans-btn, body.gated #reports-btn, body.gated #cart-btn { display: none; }
 
 /* ---------- Page ---------- */
 
@@ -1258,9 +1343,9 @@ button.low-stock-row:hover { background: var(--accent-soft); }
 
 /* ---------- Smaller screens ---------- */
 
-/* Tablets: the title moves into the page so the logo and the four labelled
+/* Tablets: the title moves into the page so the logo and the five labelled
    buttons fit on one row without overlapping. */
-@media (max-width: 1040px) {
+@media (max-width: 1180px) {
   .topbar-left h1 {
     position: absolute;
     width: 1px;
@@ -1273,10 +1358,8 @@ button.low-stock-row:hover { background: var(--accent-soft); }
   .mobile-title { display: block; }
 }
 
-@media (max-width: 760px) {
-  .topbar-inner { padding: 0.5rem 0.75rem; }
-  .brand-logo { height: 28px; }
-
+/* Narrow tablets and phones: the top-bar buttons become icon-only squares. */
+@media (max-width: 880px) {
   .topbar-right { gap: 0.4rem; }
   .topbar-right .btn-label { display: none; }
   .topbar-right .nav-btn, .topbar-right .cart-btn {
@@ -1292,6 +1375,11 @@ button.low-stock-row:hover { background: var(--accent-soft); }
     box-shadow: 0 0 0 2px var(--surface);
   }
   #cart-badge { background: var(--danger); color: #fff; }
+}
+
+@media (max-width: 760px) {
+  .topbar-inner { padding: 0.5rem 0.75rem; }
+  .brand-logo { height: 28px; }
 
   .page { padding: 1rem 0.75rem 4rem; }
 
@@ -1370,6 +1458,11 @@ button.low-stock-row:hover { background: var(--accent-soft); }
 
 @media (max-width: 480px) {
   .form-row { flex-direction: column; gap: 0; }
+
+  /* Five buttons beside the logo on a phone: a little smaller and closer. */
+  .brand-logo { height: 24px; }
+  .topbar-right { gap: 0.3rem; }
+  .topbar-right .nav-btn, .topbar-right .cart-btn { width: 40px; height: 40px; }
 
   .cart-line {
     display: grid;

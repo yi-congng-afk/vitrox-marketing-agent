@@ -6,12 +6,17 @@ const API = {
   reports: '/.netlify/functions/store-reports',
   loans: '/.netlify/functions/store-loans',
   checkout: '/.netlify/functions/store-checkout',
+  session: '/.netlify/functions/store-session',
 };
+
+// Public identifier of this site's "Sign in with Google" client (not a secret).
+const GOOGLE_CLIENT_ID = '725610917729-tou01tupum34inr9smfeb9codh1dounr.apps.googleusercontent.com';
 
 const ADMIN_PW_KEY = 'vitroxStoreAdminPw';
 const CART_KEY = 'vitroxStoreCart';
 const USER_KEY = 'vitroxStoreUser';
 const ITEMS_CACHE_KEY = 'vitroxStoreItemsCache';
+const SESSION_KEY = 'vitroxStoreSession';
 
 let items = [];
 let categories = [];
@@ -107,7 +112,9 @@ function rememberUser(name, employeeNo) {
 }
 
 function prefillPerson(nameId, employeeNoId) {
-  const user = rememberedUser();
+  // Typed details are remembered per browser, which may be a shared PC — so a
+  // signed-in person is never offered them as their own.
+  const user = session ? {} : rememberedUser();
   el(nameId).value = user.name || '';
   el(employeeNoId).value = user.employeeNo || '';
 }
@@ -166,15 +173,88 @@ function updateAdminUI() {
   document.querySelectorAll('.admin-only').forEach((node) => {
     node.hidden = !unlocked;
   });
+  updateGate();
+}
+
+// ---------- ViTrox sign-in (who is using the store) ----------
+
+// { token, user: { email, name, employeeNo, expiresAt } } or null. The token is
+// issued by the store server after Google confirms a @vitrox.com account.
+function readStoredSession() {
+  const stored = readStored(SESSION_KEY, null);
+  const usable =
+    stored &&
+    typeof stored.token === 'string' &&
+    stored.user &&
+    typeof stored.user.email === 'string' &&
+    typeof stored.user.name === 'string' &&
+    Number(stored.user.expiresAt) > Date.now();
+  return usable ? { token: stored.token, user: stored.user } : null;
+}
+
+let session = readStoredSession();
+// Whether the admin has made sign-in compulsory. Learned from the server.
+let requireSignIn = false;
+
+function signedInUser() {
+  return session ? session.user : null;
+}
+
+function setSession(next) {
+  session = next && next.token && next.user ? { token: next.token, user: next.user } : null;
+  if (session) writeStored(SESSION_KEY, session);
+  else {
+    try {
+      localStorage.removeItem(SESSION_KEY);
+    } catch {
+      // nothing stored
+    }
+  }
+  updateAccountUI();
+}
+
+function isGated() {
+  return requireSignIn && !session && !isAdminUnlocked();
+}
+
+// Shows the sign-in screen instead of the store when sign-in is compulsory.
+function updateGate() {
+  const gated = isGated();
+  const wasGated = document.body.classList.contains('gated');
+  document.body.classList.toggle('gated', gated);
+  el('signin-gate').hidden = !gated;
+  if (gated) {
+    drawGoogleButton('gate');
+  } else if (wasGated) {
+    setFormError('gate-error', '');
+    if (!itemsLoaded) renderSkeleton();
+    loadItems({ silent: true });
+    loadReportsBadge();
+  }
+}
+
+function setRequireSignIn(value) {
+  requireSignIn = Boolean(value);
+  updateGate();
+  updateRequireSignInButton();
 }
 
 // ---------- Talking to the server ----------
 
-// Never throws. Returns { ok, status, data, error, unauthorized }.
-async function request(url, { method = 'GET', body, admin = false } = {}) {
+const OFFLINE = () => ({
+  ok: false,
+  status: 0,
+  data: {},
+  error: 'Could not reach the store server — check your connection and try again.',
+});
+
+async function send(url, method, body, token) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (admin) Object.assign(headers, adminHeaders());
+  if (token) headers['x-store-session'] = token;
+  // The admin password also gets an admin past a compulsory sign-in, so it
+  // goes with every request while Admin is unlocked.
+  Object.assign(headers, adminHeaders());
 
   let res;
   try {
@@ -185,12 +265,7 @@ async function request(url, { method = 'GET', body, admin = false } = {}) {
       cache: 'no-store',
     });
   } catch {
-    return {
-      ok: false,
-      status: 0,
-      data: {},
-      error: 'Could not reach the store server — check your connection and try again.',
-    };
+    return null;
   }
 
   let data = {};
@@ -198,6 +273,60 @@ async function request(url, { method = 'GET', body, admin = false } = {}) {
     data = (await res.json()) || {};
   } catch {
     data = {};
+  }
+  return { res, data };
+}
+
+// Never throws. Returns { ok, status, data, error, unauthorized, sessionExpired, signInRequired }.
+// anonymousOk: if the sign-in has run out, try once more signed out (fine for
+// reading; not for a record that would then be saved without the person's name).
+async function request(url, { method = 'GET', body, admin = false, anonymousOk = method === 'GET' } = {}) {
+  const sentToken = session ? session.token : null;
+  const sentAdmin = isAdminUnlocked();
+
+  let sent = await send(url, method, body, sentToken);
+  if (!sent) return OFFLINE();
+
+  if (sent.res.status === 401 && sent.data.code === 'session_expired') {
+    if (session && session.token === sentToken) setSession(null);
+    if (!anonymousOk) {
+      return {
+        ok: false,
+        status: 401,
+        data: sent.data,
+        sessionExpired: true,
+        error: requireSignIn
+          ? 'Your sign-in has expired — nothing was recorded. Please sign in again, then retry.'
+          : 'Your sign-in has expired — nothing was recorded. Sign in again, or type your name and employee number, then retry.',
+      };
+    }
+    sent = await send(url, method, body, null);
+    if (!sent) return OFFLINE();
+  }
+
+  const { res, data } = sent;
+
+  if (res.status === 401 && data.code === 'signin_required') {
+    if (sentAdmin) {
+      // A correct admin password would have been let through.
+      lockAdmin();
+      setRequireSignIn(true);
+      return {
+        ok: false,
+        status: 401,
+        data,
+        unauthorized: true,
+        error: 'Admin session expired or incorrect password — please unlock Admin again.',
+      };
+    }
+    setRequireSignIn(true);
+    return {
+      ok: false,
+      status: 401,
+      data,
+      signInRequired: true,
+      error: data.error || 'Please sign in with your ViTrox account to use the store.',
+    };
   }
 
   if (admin && (res.status === 401 || res.status === 403)) {
@@ -263,7 +392,7 @@ function showToast(message, type = '', duration) {
 
 // Windows opened from another window (e.g. "Report Issue" from an item) go
 // back to that window when they are closed, instead of dropping to the grid.
-const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal']);
+const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal']);
 // Forms where a stray click outside should not throw away what was typed.
 const KEEP_ON_BACKDROP = new Set(['item-form-modal', 'txn-modal', 'edit-txn-modal', 'report-modal', 'return-modal']);
 const returnTo = {};
@@ -520,7 +649,7 @@ el('admin-form').addEventListener('submit', (e) => {
 
     // DELETE with a nonexistent id: the server rejects a bad password before the
     // id is even looked up, so this verifies the password without changing data.
-    const probe = await request(`${API.items}?id=__admin_probe__`, { method: 'DELETE', admin: true });
+    const probe = await request(`${API.items}?id=__admin_probe__`, { method: 'DELETE', admin: true, anonymousOk: true });
     if (probe.unauthorized) {
       setFormError('admin-form-error', 'Incorrect admin password.');
       el('admin-password-input').select();
@@ -539,6 +668,393 @@ el('admin-form').addEventListener('submit', (e) => {
     if (!el('detail-modal').hidden) renderHistory();
     showToast('Admin mode unlocked.', 'success');
     if (action) action();
+  });
+});
+
+// ---------- Account: sign in with Google, employee number, sign out ----------
+
+// Every form that asks "who are you?". Signed-in staff are not asked.
+const PERSON_FIELDS = [
+  { name: 'checkout-name', employeeNo: 'checkout-employee-no', note: 'checkout-person-note' },
+  { name: 'txn-name', employeeNo: 'txn-employee-no', note: 'txn-person-note' },
+  { name: 'return-name', employeeNo: 'return-employee-no', note: 'return-person-note' },
+  { name: 'report-name', employeeNo: 'report-employee-no', note: 'report-person-note' },
+];
+
+function firstNameOf(name) {
+  return String(name || '').trim().split(/\s+/)[0] || 'Account';
+}
+
+function initialsOf(name) {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return (
+    words
+      .slice(0, 2)
+      .map((word) => Array.from(word)[0])
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+// Hides the name / employee-number boxes the store can already fill in. Hidden
+// boxes are also disabled so the browser does not insist they be filled.
+function syncPersonFields() {
+  const user = signedInUser();
+  const hasNumber = Boolean(user && user.employeeNo);
+
+  PERSON_FIELDS.forEach((field) => {
+    const nameInput = el(field.name);
+    const numberInput = el(field.employeeNo);
+    nameInput.disabled = Boolean(user);
+    nameInput.closest('label').hidden = Boolean(user);
+    numberInput.disabled = hasNumber;
+    numberInput.closest('label').hidden = hasNumber;
+    nameInput.closest('.form-row').hidden = hasNumber;
+
+    const note = el(field.note);
+    note.hidden = false;
+    note.classList.toggle('is-signed-in', Boolean(user));
+    if (hasNumber) {
+      note.innerHTML =
+        `${icon('user')}<span>Recorded as <strong>${escapeHtml(user.name)}</strong> (${escapeHtml(user.employeeNo)}) · ` +
+        `<button type="button" class="link-btn" data-open-account>Change</button></span>`;
+    } else if (user) {
+      note.innerHTML =
+        `${icon('user')}<span>Recorded as <strong>${escapeHtml(user.name)}</strong>. ` +
+        `Enter your employee number just this once — the store will remember it.</span>`;
+    } else {
+      note.innerHTML =
+        `${icon('user')}<span><button type="button" class="link-btn" data-open-account>Sign in with your ViTrox account</button> ` +
+        `to skip typing your name and employee number.</span>`;
+    }
+  });
+}
+
+// Who a form is being submitted by: the signed-in person, or whatever was typed.
+function personFrom(nameId, employeeNoId) {
+  const user = signedInUser();
+  const typedNumber = el(employeeNoId).value;
+  if (!user) return { name: el(nameId).value, employeeNo: typedNumber };
+  return { name: user.name, employeeNo: user.employeeNo || typedNumber };
+}
+
+// After a form went through: remember who it was, for next time.
+async function rememberPerson(person) {
+  const user = signedInUser();
+  if (!user) {
+    rememberUser(person.name, person.employeeNo);
+    return;
+  }
+  const typed = String(person.employeeNo || '').trim();
+  if (user.employeeNo || !typed) return;
+  // First record since signing in: keep the employee number with the account.
+  const res = await request(API.session, { method: 'PUT', body: { employeeNo: typed } });
+  if (res.ok && res.data.token && res.data.user) setSession({ token: res.data.token, user: res.data.user });
+}
+
+function updateAccountUI() {
+  const user = signedInUser();
+  const btn = el('account-btn');
+  btn.innerHTML = `${icon('user')}<span class="btn-label">${user ? escapeHtml(firstNameOf(user.name)) : 'Sign in'}</span>`;
+  btn.classList.toggle('is-on', Boolean(user));
+  const label = user ? `Signed in as ${user.name} — open your account` : 'Sign in with your ViTrox account';
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+
+  syncPersonFields();
+  if (!el('account-modal').hidden) renderAccountModal();
+  updateGate();
+}
+
+function renderAccountModal() {
+  const user = signedInUser();
+  el('account-title-text').textContent = user ? 'Your account' : 'Sign in';
+  el('account-signed-out').hidden = Boolean(user);
+  el('account-form').hidden = !user;
+
+  if (!user) {
+    drawGoogleButton('modal');
+    return;
+  }
+  el('account-avatar').textContent = initialsOf(user.name);
+  el('account-name').textContent = user.name;
+  el('account-email').textContent = user.email;
+  el('account-first-note').hidden = Boolean(user.employeeNo);
+  const input = el('account-employee-no');
+  if (document.activeElement !== input) input.value = user.employeeNo || '';
+}
+
+function openAccountModal() {
+  setFormError('account-signin-error', '');
+  setFormError('account-form-error', '');
+  // Opened first: Google can only draw its button inside something visible.
+  openModal('account-modal');
+  renderAccountModal();
+  const user = signedInUser();
+  if (user && !user.employeeNo) el('account-employee-no').focus({ preventScroll: true });
+}
+
+el('account-btn').addEventListener('click', openAccountModal);
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-open-account]')) openAccountModal();
+});
+
+el('account-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  withBusy(submitButton(e.currentTarget), async () => {
+    setFormError('account-form-error', '');
+    const user = signedInUser();
+    if (!user) return;
+    const employeeNo = el('account-employee-no').value.trim();
+    if (!employeeNo) {
+      setFormError('account-form-error', 'Enter your employee number.');
+      return;
+    }
+    if (employeeNo === user.employeeNo) {
+      closeModal('account-modal');
+      return;
+    }
+
+    const res = await request(API.session, { method: 'PUT', body: { employeeNo } });
+    if (!res.ok) {
+      // An expired sign-in has already switched this window back to "Sign in".
+      if (res.sessionExpired) setFormError('account-signin-error', 'Your sign-in has expired — please sign in again.');
+      else setFormError('account-form-error', res.error);
+      return;
+    }
+    setSession({ token: res.data.token, user: res.data.user });
+    closeModal('account-modal');
+    showToast('Saved — the store will fill in your details from now on.', 'success');
+  });
+});
+
+el('signout-btn').addEventListener('click', () => {
+  signedOutByChoice = true;
+  try {
+    googleId().disableAutoSelect();
+  } catch {
+    // Google's script is not loaded — nothing to switch off.
+  }
+  setSession(null);
+  closeModal('account-modal');
+  showToast('Signed out.');
+});
+
+// ----- Google Identity Services -----
+
+let googleReady = false;
+let googleFailed = false;
+let signingIn = false;
+let signedOutByChoice = false;
+let sessionChecked = false;
+let oneTapOffered = false;
+
+const GOOGLE_SLOTS = {
+  modal: { slot: 'google-btn-modal', note: 'google-note-modal' },
+  gate: { slot: 'google-btn-gate', note: 'google-note-gate' },
+};
+
+function googleId() {
+  return (window.google && window.google.accounts && window.google.accounts.id) || null;
+}
+
+function initGoogle() {
+  if (googleReady) return true;
+  const gsi = googleId();
+  if (!gsi) return false;
+  try {
+    gsi.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: onGoogleCredential,
+      auto_select: true,
+      hd: 'vitrox.com',
+      context: 'signin',
+    });
+  } catch {
+    return false;
+  }
+  googleReady = true;
+  googleFailed = false;
+  if (!el('account-modal').hidden && !session) drawGoogleButton('modal');
+  if (isGated()) drawGoogleButton('gate');
+  offerOneTap();
+  return true;
+}
+
+// Google calls this itself once its script has finished loading.
+window.onGoogleLibraryLoad = initGoogle;
+
+function drawGoogleButton(which) {
+  const slot = el(GOOGLE_SLOTS[which].slot);
+  const note = el(GOOGLE_SLOTS[which].note);
+  const unavailable = 'Google sign-in could not load here. Check your connection (or an ad blocker), then reload the page.';
+
+  if (!googleReady && !initGoogle()) {
+    note.textContent = googleFailed ? unavailable : 'Loading Google sign-in…';
+    note.hidden = false;
+    return;
+  }
+  note.hidden = true;
+  if (slot.childElementCount > 0) return;
+  try {
+    googleId().renderButton(slot, {
+      type: 'standard',
+      theme: 'outline',
+      size: 'large',
+      text: 'signin_with',
+      shape: 'pill',
+      logo_alignment: 'left',
+      width: 280,
+    });
+  } catch {
+    note.textContent = unavailable;
+    note.hidden = false;
+  }
+}
+
+// Google's own small "Continue as …" prompt, for people who are not signed in yet.
+function offerOneTap() {
+  if (!googleReady || !sessionChecked || session || signedOutByChoice || oneTapOffered) return;
+  oneTapOffered = true;
+  try {
+    googleId().prompt();
+  } catch {
+    // The button in the Sign in window still works.
+  }
+}
+
+function showSignInError(message) {
+  if (!el('account-modal').hidden) setFormError('account-signin-error', message);
+  else if (isGated()) setFormError('gate-error', message);
+  else showToast(message, 'error');
+}
+
+// Google hands over a signed proof of who the person is; the store server
+// checks it (and that it is a @vitrox.com account) and starts a store session.
+async function onGoogleCredential(response) {
+  const credential = response && response.credential;
+  if (!credential || signingIn) return;
+  signingIn = true;
+  setFormError('account-signin-error', '');
+  setFormError('gate-error', '');
+  const res = await request(API.session, { method: 'POST', body: { credential }, anonymousOk: true });
+  signingIn = false;
+
+  if (!res.ok) {
+    if (res.status === 403) {
+      // Wrong kind of account — let them pick another one next time.
+      try {
+        googleId().disableAutoSelect();
+      } catch {
+        // not loaded
+      }
+    }
+    showSignInError(res.error);
+    return;
+  }
+  if (!res.data.token || !res.data.user) {
+    showSignInError('Sign-in did not complete — please try again.');
+    return;
+  }
+
+  signedOutByChoice = false;
+  requireSignIn = Boolean(res.data.requireSignIn);
+  setSession({ token: res.data.token, user: res.data.user });
+  updateRequireSignInButton();
+
+  const user = signedInUser();
+  if (!user.employeeNo) {
+    // One last step, once: the employee number Google does not know. Any number
+    // already sitting in a form was remembered for whoever typed it last.
+    PERSON_FIELDS.forEach((field) => {
+      el(field.employeeNo).value = '';
+    });
+    openAccountModal();
+  } else {
+    closeModal('account-modal');
+    showToast(`Signed in as ${user.name}.`, 'success');
+  }
+}
+
+// Asks the server whether sign-in is compulsory and whether the sign-in this
+// browser remembers is still good.
+async function checkSession() {
+  const sentToken = session ? session.token : null;
+  const res = await request(API.session);
+  sessionChecked = true;
+  if (res.ok) {
+    if (session && session.token === sentToken) {
+      if (res.data.user) setSession({ token: res.data.token || session.token, user: res.data.user });
+      else {
+        setSession(null);
+        showToast('Your sign-in has expired — please sign in again.');
+      }
+    }
+    setRequireSignIn(res.data.requireSignIn);
+  }
+  offerOneTap();
+}
+
+// Signing in or out in one tab carries over to the other open tabs.
+window.addEventListener('storage', (e) => {
+  if (e.key !== null && e.key !== SESSION_KEY) return;
+  const stored = readStoredSession();
+  if ((stored ? stored.token : null) === (session ? session.token : null)) return;
+  session = stored;
+  updateAccountUI();
+});
+
+// ----- Admin: make sign-in compulsory, or optional again -----
+
+function updateRequireSignInButton() {
+  const btn = el('require-signin-btn');
+  btn.innerHTML = `${icon(requireSignIn ? 'lock' : 'user')} Sign-in: ${requireSignIn ? 'Required' : 'Optional'}`;
+  btn.title = requireSignIn
+    ? 'Everyone must sign in with a ViTrox account. Click to make sign-in optional again.'
+    : 'Sign-in is optional. Click to require a ViTrox account from everyone.';
+}
+
+el('require-signin-btn').addEventListener('click', async () => {
+  const turningOn = !requireSignIn;
+  if (turningOn && !session) {
+    showToast('Sign in with your own ViTrox account first — that proves sign-in works before everyone needs it.', 'error', 8000);
+    openAccountModal();
+    return;
+  }
+
+  const confirmed = await confirmDialog(
+    turningOn
+      ? {
+          title: 'Require ViTrox sign-in?',
+          message:
+            'Everyone will have to sign in with their @vitrox.com Google account before they can see or use the store. ' +
+            'The admin password still gets you in without signing in, so you can always switch this back.',
+          confirmLabel: 'Require sign-in',
+          danger: false,
+        }
+      : {
+          title: 'Make sign-in optional again?',
+          message:
+            'Anyone with the link will be able to use the store and type their name and employee number by hand. ' +
+            'Staff who do sign in are still recorded automatically.',
+          confirmLabel: 'Make optional',
+          danger: false,
+        }
+  );
+  if (!confirmed) return;
+
+  withBusy(el('require-signin-btn'), async () => {
+    const res = await request(API.session, { method: 'PATCH', admin: true, body: { requireSignIn: turningOn } });
+    if (!res.ok) {
+      showToast(res.error, 'error', 8000);
+      return;
+    }
+    setRequireSignIn(res.data.requireSignIn);
+    showToast(
+      res.data.requireSignIn ? 'Sign-in is now required for everyone.' : 'Sign-in is now optional.',
+      'success'
+    );
   });
 });
 
@@ -679,6 +1195,8 @@ async function runLoadItems({ silent = false } = {}) {
 
   if (!res.ok) {
     setRefreshing(false);
+    // "Please sign in" is shown by the sign-in screen, not as a loading failure.
+    if (res.signInRequired || isGated()) return false;
     if (!itemsLoaded) showLoadError(res.error);
     else if (!silent) showToast(`Could not refresh the stock list. ${res.error}`, 'error');
     return false;
@@ -686,6 +1204,8 @@ async function runLoadItems({ silent = false } = {}) {
 
   lastLoadedAt = Date.now();
   setRefreshing(false);
+  // The list came back without a sign-in, so sign-in is no longer compulsory.
+  if (isGated()) setRequireSignIn(false);
   applyItems(res.data.items || [], res.data.categories || []);
   return true;
 }
@@ -1183,8 +1703,7 @@ el('txn-form').addEventListener('submit', (e) => {
       itemId: selectedItemId,
       type: 'add',
       quantity: Number(el('txn-quantity').value),
-      name: el('txn-name').value,
-      employeeNo: el('txn-employee-no').value,
+      ...personFrom('txn-name', 'txn-employee-no'),
       remarks: el('txn-remarks').value,
     };
     const res = await request(API.txns, { method: 'POST', admin: true, body });
@@ -1192,7 +1711,7 @@ el('txn-form').addEventListener('submit', (e) => {
       setFormError('txn-form-error', res.error);
       return;
     }
-    rememberUser(body.name, body.employeeNo);
+    rememberPerson(body);
     closeModal('txn-modal');
     showToast(`Added ${body.quantity} to stock.`, 'success');
     await loadItems({ silent: true });
@@ -1349,7 +1868,7 @@ el('cart-lines').addEventListener('click', (e) => {
 });
 
 function openCart() {
-  const user = rememberedUser();
+  const user = session ? {} : rememberedUser();
   if (!el('checkout-name').value) el('checkout-name').value = user.name || '';
   if (!el('checkout-employee-no').value) el('checkout-employee-no').value = user.employeeNo || '';
   el('checkout-return-date').min = todayStr();
@@ -1402,8 +1921,7 @@ el('checkout-form').addEventListener('submit', (e) => {
     setFormError('checkout-form-error', '');
     const hasLoanable = cartLoanableItems().length > 0;
     const body = {
-      name: el('checkout-name').value,
-      employeeNo: el('checkout-employee-no').value,
+      ...personFrom('checkout-name', 'checkout-employee-no'),
       purpose: el('checkout-purpose').value,
       expectedReturnDate: hasLoanable ? el('checkout-return-date').value || null : null,
       lines: cart.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
@@ -1422,7 +1940,7 @@ el('checkout-form').addEventListener('submit', (e) => {
       return;
     }
 
-    rememberUser(body.name, body.employeeNo);
+    rememberPerson(body);
     const summary = cart.map((line) => {
       const item = items.find((i) => i.id === line.itemId) || {};
       return { name: item.name || 'Item', quantity: line.quantity, unit: item.unit || 'pcs', returnable: Boolean(item.returnable) };
@@ -1431,7 +1949,13 @@ el('checkout-form').addEventListener('submit', (e) => {
     saveCart();
     el('checkout-purpose').value = '';
     el('checkout-return-date').value = '';
-    showCheckoutSuccess(summary, body, (res.data.loans || []).length);
+    // Show the name the server actually recorded (the signed-in person's).
+    const recorded = (res.data.transactions || [])[0] || (res.data.loans || [])[0] || {};
+    showCheckoutSuccess(
+      summary,
+      { ...body, name: recorded.name || body.name, employeeNo: recorded.employeeNo || body.employeeNo },
+      (res.data.loans || []).length
+    );
     renderGrid();
     await loadItems({ silent: true });
     loadReportsBadge();
@@ -1536,8 +2060,7 @@ el('return-form').addEventListener('submit', (e) => {
     setFormError('return-form-error', '');
     const body = {
       returns,
-      name: el('return-name').value,
-      employeeNo: el('return-employee-no').value,
+      ...personFrom('return-name', 'return-employee-no'),
       notes: el('return-notes').value,
     };
     const res = await request(API.loans, { method: 'PATCH', body });
@@ -1549,7 +2072,7 @@ el('return-form').addEventListener('submit', (e) => {
       return;
     }
 
-    rememberUser(body.name, body.employeeNo);
+    rememberPerson(body);
     closeModal('return-modal');
     showToast(`Return recorded for ${plural(returns.length, 'item', 'items')}.`, 'success');
     await loadItems({ silent: true });
@@ -1735,7 +2258,7 @@ el('loans-return-selected-btn').addEventListener('click', () => {
 el('loans-export-btn').addEventListener('click', () => {
   if (!loansLoaded) return;
   const rows = [
-    ['Item', 'Quantity', 'Returned', 'Not Returned', 'Borrowed By', 'Employee No', 'Purpose', 'Moved Out', 'Due Back', 'Status', 'Last Returned On', 'Last Returned By'],
+    ['Item', 'Quantity', 'Returned', 'Not Returned', 'Borrowed By', 'Employee No', 'Purpose', 'Moved Out', 'Due Back', 'Status', 'Last Returned On', 'Last Returned By', 'Email'],
     ...allLoans.map((loan) => {
       const returns = loan.returns || [];
       const last = returns[returns.length - 1];
@@ -1752,6 +2275,7 @@ el('loans-export-btn').addEventListener('click', () => {
         loan.status === 'returned' ? 'Returned' : isOverdue(loan) ? 'Overdue' : 'Not returned',
         last ? csvDateTime(last.returnedAt) : '',
         last ? `${last.name} (${last.employeeNo})` : '',
+        loan.email || '',
       ];
     }),
   ];
@@ -1779,8 +2303,7 @@ el('report-form').addEventListener('submit', (e) => {
     const body = {
       itemId: selectedItemId,
       type: el('report-type').value,
-      name: el('report-name').value,
-      employeeNo: el('report-employee-no').value,
+      ...personFrom('report-name', 'report-employee-no'),
       quantity: el('report-quantity').value || null,
       message: el('report-message').value,
     };
@@ -1789,7 +2312,7 @@ el('report-form').addEventListener('submit', (e) => {
       setFormError('report-form-error', res.error);
       return;
     }
-    rememberUser(body.name, body.employeeNo);
+    rememberPerson(body);
     closeModal('report-modal');
     showToast('Report sent to the admin. Thank you!', 'success');
     loadReportsBadge();
@@ -2094,7 +2617,7 @@ el('export-txns-btn').addEventListener('click', () => {
       return;
     }
     const rows = [
-      ['Date', 'Item', 'Type', 'Quantity', 'Before', 'After', 'Name', 'Employee No', 'Remarks'],
+      ['Date', 'Item', 'Type', 'Quantity', 'Before', 'After', 'Name', 'Employee No', 'Remarks', 'Email'],
       ...(res.data.transactions || []).map((t) => [
         csvDateTime(t.timestamp),
         t.itemName,
@@ -2105,6 +2628,7 @@ el('export-txns-btn').addEventListener('click', () => {
         t.name,
         t.employeeNo,
         t.remarks,
+        t.email || '',
       ]),
     ];
     downloadCsv(`vitrox-store-activity-log-${todayStr()}.csv`, rows);
@@ -2114,6 +2638,8 @@ el('export-txns-btn').addEventListener('click', () => {
 // ---------- Start ----------
 
 updateAdminUI();
+updateAccountUI();
+updateRequireSignInButton();
 setBadge('cart-badge', cart.length);
 
 // Show the last known stock list straight away, then replace it with the live one.
@@ -2128,3 +2654,14 @@ setBadge('cart-badge', cart.length);
 
 loadItems();
 loadReportsBadge();
+checkSession();
+
+// Google's script loads on its own schedule: start now if it is already here,
+// otherwise it calls initGoogle itself. If it never arrives, say so.
+initGoogle();
+setTimeout(() => {
+  if (googleReady || initGoogle()) return;
+  googleFailed = true;
+  if (!el('account-modal').hidden && !session) drawGoogleButton('modal');
+  if (isGated()) drawGoogleButton('gate');
+}, 8000);

@@ -1,9 +1,13 @@
 const { getItems, saveItems, getTransactions, saveTransactions, genId } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
 const { requireAdmin } = require('./_shared/store-auth');
+const { checkAccess, recordedBy } = require('./_shared/store-access');
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
+
+  const access = await checkAccess(event);
+  if (access.response) return access.response;
 
   if (method === 'GET') {
     const itemId = event.queryStringParameters && event.queryStringParameters.itemId;
@@ -25,7 +29,9 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
     }
 
-    const { itemId, type, quantity, name, employeeNo, remarks } = body;
+    const { itemId, type, quantity, remarks } = body;
+    const who = recordedBy(access.user, body);
+    const { name, employeeNo } = who;
 
     if (!itemId || !['add', 'remove'].includes(type)) {
       return { statusCode: 400, body: JSON.stringify({ error: 'itemId and a valid type (add/remove) are required' }) };
@@ -72,8 +78,7 @@ exports.handler = async (event) => {
       quantity: qty,
       quantityBefore,
       quantityAfter: item.quantity,
-      name: String(name).trim(),
-      employeeNo: String(employeeNo).trim(),
+      ...who,
       remarks: remarks ? String(remarks).trim() : '',
       timestamp: new Date().toISOString(),
     };

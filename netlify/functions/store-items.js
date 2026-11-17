@@ -10,6 +10,7 @@ const {
   deleteImage,
   migrateInlineImages,
 } = require('./_shared/store-blobs');
+const { checkAccess } = require('./_shared/store-access');
 
 const REQUIRED_FIELDS = ['name', 'category'];
 
@@ -57,6 +58,9 @@ function sanitizeItem(input, existing) {
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
+
+  const access = await checkAccess(event);
+  if (access.response) return access.response;
 
   if (method === 'GET') {
     let items = await getItems();

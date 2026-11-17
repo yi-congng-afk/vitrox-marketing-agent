@@ -82,6 +82,32 @@ function loansStore() {
 function imagesStore() {
   return getStore(storeConfig('vitrox-store-images'));
 }
+function configStore() {
+  return getStore(storeConfig('vitrox-store-config'));
+}
+function usersStore() {
+  return getStore(storeConfig('vitrox-store-users'));
+}
+
+// ---- Sign-in settings and staff profiles (used by _shared/store-access.js) ----
+
+async function getConfig() {
+  return configStore().get('config', { type: 'json' });
+}
+
+async function saveConfig(config) {
+  await configStore().setJSON('config', config);
+}
+
+// One small blob per person, so two people signing in at the same moment can
+// never overwrite each other's details.
+async function getProfile(key) {
+  return usersStore().get(key, { type: 'json' });
+}
+
+async function saveProfile(key, profile) {
+  await usersStore().setJSON(key, profile);
+}
 
 // ---- Photos ----
 // Photos used to be saved inside the items list itself (as data: URLs), which
@@ -251,6 +277,10 @@ module.exports = {
   getLoans,
   saveLoans,
   genId,
+  getConfig,
+  saveConfig,
+  getProfile,
+  saveProfile,
   IMAGE_FIELDS,
   isInlineImage,
   saveImage,

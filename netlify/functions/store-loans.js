@@ -1,8 +1,12 @@
 const { requireAdmin } = require('./_shared/store-auth');
 const { getItems, saveItems, getLoans, saveLoans, genId } = require('./_shared/store-blobs');
+const { checkAccess, recordedBy } = require('./_shared/store-access');
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
+
+  const access = await checkAccess(event);
+  if (access.response) return access.response;
 
   if (method === 'GET') {
     const params = event.queryStringParameters || {};
@@ -21,7 +25,9 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
     }
 
-    const { itemId, quantity, name, employeeNo, purpose, expectedReturnDate } = body;
+    const { itemId, quantity, purpose, expectedReturnDate } = body;
+    const who = recordedBy(access.user, body);
+    const { name, employeeNo } = who;
 
     if (!itemId) return { statusCode: 400, body: JSON.stringify({ error: 'itemId is required' }) };
     const qty = Math.round(Number(quantity));
@@ -56,8 +62,7 @@ exports.handler = async (event) => {
       itemName: item.name,
       quantity: qty,
       quantityReturned: 0,
-      name: String(name).trim(),
-      employeeNo: String(employeeNo).trim(),
+      ...who,
       purpose: String(purpose).trim(),
       expectedReturnDate: expectedReturnDate || null,
       loanedAt: new Date().toISOString(),
@@ -84,7 +89,9 @@ exports.handler = async (event) => {
 
     // Either one loan (?id=...&quantity) or several at once (body.returns), so a
     // person bringing back everything from an event enters their details once.
-    const { name, employeeNo, notes } = body;
+    const { notes } = body;
+    const who = recordedBy(access.user, body);
+    const { name, employeeNo } = who;
     const rawLines = id ? [{ loanId: id, quantity: body.quantity }] : body.returns;
     if (!Array.isArray(rawLines) || rawLines.length === 0) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Select at least one loan to return' }) };
@@ -126,8 +133,7 @@ exports.handler = async (event) => {
       if (!Array.isArray(loan.returns)) loan.returns = [];
       loan.returns.push({
         quantity: qty,
-        name: String(name).trim(),
-        employeeNo: String(employeeNo).trim(),
+        ...who,
         notes: notes ? String(notes).trim() : '',
         returnedAt,
       });

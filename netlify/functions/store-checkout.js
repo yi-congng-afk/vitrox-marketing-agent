@@ -8,6 +8,7 @@ const {
   genId,
 } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
+const { checkAccess, recordedBy } = require('./_shared/store-access');
 
 function json(statusCode, payload) {
   return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
@@ -19,15 +20,19 @@ function json(statusCode, payload) {
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
 
+  const access = await checkAccess(event);
+  if (access.response) return access.response;
+
   let body;
   try {
-    body = JSON.parse(event.body || '{}');
+    body = JSON.parse(event.body || '{}') || {};
   } catch {
     return json(400, { error: 'Invalid request body' });
   }
 
-  const name = String(body.name || '').trim();
-  const employeeNo = String(body.employeeNo || '').trim();
+  // Signed-in staff are recorded under their ViTrox account; otherwise as typed.
+  const who = recordedBy(access.user, body);
+  const { name, employeeNo } = who;
   const purpose = String(body.purpose || '').trim();
   const expectedReturnDate = body.expectedReturnDate ? String(body.expectedReturnDate).trim() : '';
 
@@ -90,8 +95,7 @@ exports.handler = async (event) => {
         itemName: item.name,
         quantity: qty,
         quantityReturned: 0,
-        name,
-        employeeNo,
+        ...who,
         purpose,
         expectedReturnDate,
         loanedAt: now,
@@ -110,8 +114,7 @@ exports.handler = async (event) => {
         quantity: qty,
         quantityBefore,
         quantityAfter: item.quantity,
-        name,
-        employeeNo,
+        ...who,
         remarks: purpose,
         timestamp: now,
       });

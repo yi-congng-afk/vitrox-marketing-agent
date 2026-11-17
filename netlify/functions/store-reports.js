@@ -1,9 +1,13 @@
 const { requireAdmin } = require('./_shared/store-auth');
 const { getItems, getReports, saveReports, genId } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
+const { checkAccess, recordedBy } = require('./_shared/store-access');
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
+
+  const access = await checkAccess(event);
+  if (access.response) return access.response;
 
   if (method === 'GET') {
     const status = event.queryStringParameters && event.queryStringParameters.status;
@@ -21,7 +25,9 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
     }
 
-    const { itemId, type, name, employeeNo, quantity, message } = body;
+    const { itemId, type, quantity, message } = body;
+    const who = recordedBy(access.user, body);
+    const { name, employeeNo } = who;
 
     if (!itemId || !['damage', 'restock'].includes(type)) {
       return { statusCode: 400, body: JSON.stringify({ error: 'itemId and a valid type (damage/restock) are required' }) };
@@ -45,8 +51,7 @@ exports.handler = async (event) => {
       itemId,
       itemName: item.name,
       type,
-      name: String(name).trim(),
-      employeeNo: String(employeeNo).trim(),
+      ...who,
       quantity: quantity !== undefined && quantity !== null && quantity !== '' ? Math.round(Number(quantity)) : null,
       message: String(message).trim(),
       status: 'open',
