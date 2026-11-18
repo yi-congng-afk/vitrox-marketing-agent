@@ -7,6 +7,7 @@ const API = {
   loans: '/.netlify/functions/store-loans',
   checkout: '/.netlify/functions/store-checkout',
   session: '/.netlify/functions/store-session',
+  admin: '/.netlify/functions/store-admin',
 };
 
 // Public identifier of this site's "Sign in with Google" client (not a secret).
@@ -392,9 +393,9 @@ function showToast(message, type = '', duration) {
 
 // Windows opened from another window (e.g. "Report Issue" from an item) go
 // back to that window when they are closed, instead of dropping to the grid.
-const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal']);
+const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal']);
 // Forms where a stray click outside should not throw away what was typed.
-const KEEP_ON_BACKDROP = new Set(['item-form-modal', 'txn-modal', 'edit-txn-modal', 'report-modal', 'return-modal']);
+const KEEP_ON_BACKDROP = new Set(['item-form-modal', 'txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'return-modal', 'categories-modal', 'cleanup-modal']);
 const returnTo = {};
 let focusBeforeModal = null;
 
@@ -1288,7 +1289,8 @@ function renderCategoryChips() {
   items.forEach((i) => {
     counts[i.category] = (counts[i.category] || 0) + 1;
   });
-  el('category-filters').innerHTML = ['All', ...categories]
+  const unlisted = [...new Set(items.map((i) => i.category))].filter((c) => c && !categories.includes(c));
+  el('category-filters').innerHTML = ['All', ...categories, ...unlisted]
     .map((cat) => {
       const active = cat === activeCategory;
       const count = cat === 'All' ? items.length : counts[cat] || 0;
@@ -1597,11 +1599,16 @@ function renderHistory() {
     if (event.kind === 'loan-out') {
       const l = event.data;
       const due = l.expectedReturnDate ? ` · due ${escapeHtml(fmtDate(l.expectedReturnDate))}` : '';
-      return `<tr>${date}<td><span class="type-label">Move Out</span></td><td>${l.quantity}</td><td>${person(l)}</td><td>${escapeHtml(l.purpose)}${due}</td><td class="row-actions"></td></tr>`;
+      return `<tr>${date}<td><span class="type-label">Move Out</span></td><td>${l.quantity}</td><td>${person(l)}</td><td>${escapeHtml(l.purpose)}${due}</td><td class="row-actions">${admin ? loanAdminButtons(l) : ''}</td></tr>`;
     }
     const r = event.data;
     const remarks = [r.notes, `against loan to ${r.loan.name}`].filter(Boolean).join(' · ');
-    return `<tr>${date}<td><span class="type-label ret">Return</span></td><td>${r.quantity}</td><td>${person(r)}</td><td>${escapeHtml(remarks)}</td><td class="row-actions"></td></tr>`;
+    const who = r.employeeNo ? person(r) : escapeHtml(r.name);
+    if (r.adjustment) {
+      const qty = r.quantity > 0 ? `+${r.quantity}` : String(r.quantity);
+      return `<tr>${date}<td><span class="type-label">Correction</span></td><td>${qty} returned</td><td>${who}</td><td>${escapeHtml(remarks)}</td><td class="row-actions"></td></tr>`;
+    }
+    return `<tr>${date}<td><span class="type-label ret">Return</span></td><td>${r.quantity}</td><td>${who}</td><td>${escapeHtml(remarks)}</td><td class="row-actions"></td></tr>`;
   });
 
   if (historyTotal > historyEvents.length) {
@@ -1613,6 +1620,15 @@ function renderHistory() {
 }
 
 el('detail-history-body').addEventListener('click', (e) => {
+  const loanBtn = e.target.closest('[data-loan-edit], [data-loan-delete]');
+  if (loanBtn) {
+    const loanId = loanBtn.dataset.loanEdit || loanBtn.dataset.loanDelete;
+    const event = historyEvents.find((ev) => ev.kind === 'loan-out' && ev.data.id === loanId);
+    if (!event) return;
+    if (loanBtn.dataset.loanEdit) requireAdminThen(() => openEditLoanModal(event.data, 'detail'));
+    else requireAdminThen(() => deleteLoan(event.data, 'detail'));
+    return;
+  }
   const editBtn = e.target.closest('[data-txn-edit]');
   const deleteBtn = e.target.closest('[data-txn-delete]');
   const id = editBtn ? editBtn.dataset.txnEdit : deleteBtn ? deleteBtn.dataset.txnDelete : null;
@@ -2154,7 +2170,7 @@ function renderLoansPanel() {
 
   el('loans-head').innerHTML = openTab
     ? '<tr><th><input type="checkbox" id="loans-select-all" aria-label="Select every loan shown" /></th><th>Item</th><th>Not returned</th><th>Borrowed by</th><th>Purpose / event</th><th>Moved out</th><th>Due back</th><th><span class="sr-only">Return</span></th></tr>'
-    : '<tr><th>Item</th><th>Qty</th><th>Borrowed by</th><th>Purpose / event</th><th>Moved out</th><th>Due back</th><th>Status</th></tr>';
+    : `<tr><th>Item</th><th>Qty</th><th>Borrowed by</th><th>Purpose / event</th><th>Moved out</th><th>Due back</th><th>Status</th>${isAdminUnlocked() ? '<th><span class="sr-only">Admin</span></th>' : ''}</tr>`;
 
   const list = filteredLoans();
   const body = el('loans-body');
@@ -2204,9 +2220,10 @@ function renderLoansPanel() {
       returnBtn.innerHTML = `${icon('return')} Return`;
       returnBtn.addEventListener('click', () => openReturnModal([loan], { origin: 'loans', checkAll: true }));
       actionCell.appendChild(returnBtn);
+      if (isAdminUnlocked()) actionCell.insertAdjacentHTML('beforeend', loanAdminButtons(loan));
       row.appendChild(actionCell);
     } else {
-      row.innerHTML = `<td><strong>${escapeHtml(loan.itemName)}</strong></td><td>${loan.quantity}</td><td>${borrower}</td><td>${escapeHtml(loan.purpose)}</td>${movedOut}<td class="nowrap">${due}</td><td>${loanStatusHtml(loan)}</td>`;
+      row.innerHTML = `<td><strong>${escapeHtml(loan.itemName)}</strong></td><td>${loan.quantity}</td><td>${borrower}</td><td>${escapeHtml(loan.purpose)}</td>${movedOut}<td class="nowrap">${due}</td><td>${loanStatusHtml(loan)}</td>${isAdminUnlocked() ? `<td class="row-actions">${loanAdminButtons(loan)}</td>` : ''}`;
     }
 
     body.appendChild(row);
@@ -2230,6 +2247,98 @@ function renderLoansPanel() {
 }
 
 el('loans-btn').addEventListener('click', openLoansPanel);
+
+el('loans-body').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-loan-edit], [data-loan-delete]');
+  if (!btn) return;
+  const loan = allLoans.find((l) => l.id === (btn.dataset.loanEdit || btn.dataset.loanDelete));
+  if (!loan) return;
+  if (btn.dataset.loanEdit) requireAdminThen(() => openEditLoanModal(loan, 'loans'));
+  else requireAdminThen(() => deleteLoan(loan, 'loans'));
+});
+
+// ---------- Admin: correct or delete a loan record ----------
+
+let editingLoan = null;
+let loanEditOrigin = null;
+
+function loanAdminButtons(loan) {
+  return (
+    `<button type="button" class="icon-btn" data-loan-edit="${escapeHtml(loan.id)}" aria-label="Edit this loan record" title="Edit this loan record">${icon('pencil')}</button>` +
+    `<button type="button" class="icon-btn danger-text" data-loan-delete="${escapeHtml(loan.id)}" aria-label="Delete this loan record" title="Delete this loan record">${icon('trash')}</button>`
+  );
+}
+
+function openEditLoanModal(loan, origin) {
+  editingLoan = loan;
+  loanEditOrigin = origin;
+  el('edit-loan-item').textContent = loan.itemName;
+  el('edit-loan-quantity').value = loan.quantity;
+  el('edit-loan-returned').value = loan.quantityReturned;
+  el('edit-loan-name').value = loan.name || '';
+  el('edit-loan-employee-no').value = loan.employeeNo || '';
+  el('edit-loan-email').value = loan.email || '';
+  el('edit-loan-purpose').value = loan.purpose || '';
+  el('edit-loan-due').value = loan.expectedReturnDate || '';
+  setFormError('edit-loan-form-error', '');
+  openModal('edit-loan-modal');
+}
+
+async function afterLoanChange(origin) {
+  await loadItems({ silent: true });
+  loadReportsBadge();
+  if (origin === 'loans') await openLoansPanel();
+  else if (origin === 'detail' && selectedItemId) await openDetail(selectedItemId);
+}
+
+el('edit-loan-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  withBusy(submitButton(e.currentTarget), async () => {
+    setFormError('edit-loan-form-error', '');
+    const res = await request(`${API.loans}?id=${encodeURIComponent(editingLoan.id)}`, {
+      method: 'PUT',
+      admin: true,
+      body: {
+        quantity: Number(el('edit-loan-quantity').value),
+        quantityReturned: Number(el('edit-loan-returned').value),
+        name: el('edit-loan-name').value,
+        employeeNo: el('edit-loan-employee-no').value,
+        email: el('edit-loan-email').value,
+        purpose: el('edit-loan-purpose').value,
+        expectedReturnDate: el('edit-loan-due').value,
+      },
+    });
+    if (!res.ok) {
+      setFormError('edit-loan-form-error', res.error);
+      return;
+    }
+    closeModal('edit-loan-modal');
+    showToast('Loan record updated.', 'success');
+    await afterLoanChange(loanEditOrigin);
+  });
+});
+
+async function deleteLoan(loan, origin) {
+  const out = loanOutstanding(loan);
+  const confirmed = await confirmDialog({
+    title: 'Delete this loan record?',
+    message:
+      `${loan.itemName} × ${loan.quantity}, borrowed by ${loan.name} for ${loan.purpose}. ` +
+      (out > 0
+        ? `The ${out} still marked as out will stop counting as on loan. If they are lost rather than back, also lower the item's total with Edit. `
+        : '') +
+      'Use this for a mistake, a test or an old record. This cannot be undone.',
+    confirmLabel: 'Delete record',
+  });
+  if (!confirmed) return;
+  const res = await request(`${API.loans}?id=${encodeURIComponent(loan.id)}`, { method: 'DELETE', admin: true });
+  if (!res.ok) {
+    showToast(res.error, 'error');
+    return;
+  }
+  showToast('Loan record deleted.', 'success');
+  await afterLoanChange(origin);
+}
 
 el('loans-tab-open').addEventListener('click', () => {
   loansTab = 'open';
@@ -2351,14 +2460,14 @@ const MOVEOUT_MAX = 20;
 function groupMoveOuts(transactions, loans) {
   const groups = new Map();
   const add = (key, at, who, purpose, line) => {
-    if (!groups.has(key)) groups.set(key, { at, who, purpose, lines: [] });
+    if (!groups.has(key)) groups.set(key, { key, at, who, purpose, lines: [] });
     groups.get(key).lines.push(line);
   };
   transactions
     .filter((t) => t.type === 'remove')
     .forEach((t) => add(t.checkoutId || t.id, t.timestamp, t, t.remarks, { name: t.itemName, qty: t.quantity }));
   loans.forEach((l) =>
-    add(l.checkoutId || l.id, l.loanedAt, l, l.purpose, { name: l.itemName, qty: l.quantity, due: l.expectedReturnDate })
+    add(l.checkoutId || l.id, l.loanedAt, l, l.purpose, { name: l.itemName, qty: l.quantity, due: l.expectedReturnDate, loan: true })
   );
   const since = Date.now() - MOVEOUT_DAYS * 86400000;
   return [...groups.values()]
@@ -2367,6 +2476,8 @@ function groupMoveOuts(transactions, loans) {
     .slice(0, MOVEOUT_MAX);
 }
 
+let moveOutGroups = [];
+
 function renderMoveOuts(transactions, loans) {
   const box = el('recent-moveouts');
   if (!transactions || !loans) {
@@ -2374,28 +2485,67 @@ function renderMoveOuts(transactions, loans) {
     return;
   }
   const groups = groupMoveOuts(transactions, loans);
+  moveOutGroups = groups;
   if (groups.length === 0) {
     box.innerHTML = `<p class="muted-text">Nothing moved out in the last ${MOVEOUT_DAYS} days.</p>`;
     return;
   }
+  const admin = isAdminUnlocked();
   box.innerHTML = groups
     .map((g) => {
       const w = g.who;
       const headline = w.email || w.name || 'Someone';
       const person = w.email ? `${w.name} (${w.employeeNo})` : `(${w.employeeNo})`;
       const lines = g.lines
-        .map((l) => `${escapeHtml(l.name)} × ${escapeHtml(l.qty)}${'due' in l ? ' <span class="moveout-loan">loan</span>' : ''}`)
+        .map((l) => `${escapeHtml(l.name)} × ${escapeHtml(l.qty)}${l.loan ? ' <span class="moveout-loan">loan</span>' : ''}`)
         .join(', ');
       const dues = [...new Set(g.lines.filter((l) => l.due).map((l) => l.due))].sort();
       const returnBy = dues.length ? ` · return by ${dues.map((d) => escapeHtml(fmtDate(d))).join(', ')}` : '';
       return (
         `<div class="report-row moveout-row"><div class="report-row-info">` +
         `<strong>${escapeHtml(headline)} <span class="moveout-verb">moved out</span> ${lines}</strong>` +
-        `<span>For ${escapeHtml(g.purpose || '—')}${returnBy} · ${escapeHtml(person)} · ${escapeHtml(fmtDateTime(g.at))}</span>` +
-        `</div></div>`
+        `<span>For ${escapeHtml(g.purpose || '—')}${returnBy} · ${escapeHtml(person)} · ${escapeHtml(fmtDateTime(g.at))}</span></div>` +
+        (admin
+          ? `<button type="button" class="icon-btn danger-text" data-moveout-delete="${escapeHtml(g.key)}" aria-label="Delete this move-out" title="Delete this move-out">${icon('trash')}</button>`
+          : '') +
+        `</div>`
       );
     })
     .join('');
+}
+
+el('recent-moveouts').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-moveout-delete]');
+  if (!btn) return;
+  const group = moveOutGroups.find((g) => g.key === btn.dataset.moveoutDelete);
+  if (group) requireAdminThen(() => deleteMoveOut(group));
+});
+
+async function deleteMoveOut(group) {
+  const what = group.lines.map((l) => `${l.name} × ${l.qty}`).join(', ');
+  const consumables = group.lines.filter((l) => !l.loan);
+  const loaned = group.lines.filter((l) => l.loan);
+  const effects = [
+    consumables.length ? `${consumables.map((l) => `${l.name} × ${l.qty}`).join(', ')} will be put back into stock.` : '',
+    loaned.length ? `${loaned.map((l) => l.name).join(', ')} will no longer count as out on loan.` : '',
+  ].filter(Boolean);
+  const confirmed = await confirmDialog({
+    title: 'Delete this move-out?',
+    message:
+      `${what} — for ${group.purpose || 'no purpose given'}. ${effects.join(' ')} ` +
+      'Use this only for a mistake or a test. To tidy up old history without changing stock, use Clear Old History instead.',
+    confirmLabel: 'Delete move-out',
+  });
+  if (!confirmed) return;
+  const res = await request(`${API.checkout}?id=${encodeURIComponent(group.key)}`, { method: 'DELETE', admin: true });
+  if (!res.ok) {
+    showToast(res.error, 'error');
+    return;
+  }
+  showToast('Move-out deleted.', 'success');
+  await loadItems({ silent: true });
+  loadReportsBadge();
+  await openReportsPanel();
 }
 
 // ---- Overdue reminder emails (admin view) ----
@@ -2471,7 +2621,7 @@ async function openReportsPanel() {
   const admin = isAdminUnlocked();
   const [allLoans, reports, txns, reminders] = await Promise.all([
     request(API.loans),
-    request(`${API.reports}?status=open`),
+    request(showResolvedReports && admin ? API.reports : `${API.reports}?status=open`),
     request(API.txns),
     admin ? request(`${API.loans}?view=reminders`, { admin: true }) : null,
   ]);
@@ -2494,25 +2644,38 @@ async function openReportsPanel() {
     : '';
 
   const list = el('reports-list');
+  const showingResolved = showResolvedReports && admin;
+  el('reports-heading').textContent = showingResolved ? 'All reports' : 'Open reports';
+  el('reports-resolved-toggle').textContent = showingResolved ? 'Show open only' : 'Show resolved';
   if (!reports.ok) {
     list.innerHTML = `<p class="muted-text">Could not load the reports. ${escapeHtml(reports.error)}</p>`;
     return;
   }
-  const open = reports.data.reports || [];
-  if (open.length === 0) {
-    list.innerHTML = '<p class="muted-text">No open reports.</p>';
+  const shown = reports.data.reports || [];
+  if (shown.length === 0) {
+    list.innerHTML = `<p class="muted-text">${showingResolved ? 'No reports yet.' : 'No open reports.'}</p>`;
     return;
   }
-  list.innerHTML = open
+  list.innerHTML = shown
     .map((r) => {
       const kind = r.type === 'damage' ? `${icon('flag')} Damaged` : `${icon('package')} Restock request`;
       const qty = r.quantity ? ` · quantity affected: ${escapeHtml(r.quantity)}` : '';
+      const resolved = r.status === 'resolved';
+      const state = resolved ? ` <span class="qty-pill ok">Resolved${r.resolvedAt ? ' ' + escapeHtml(fmtDay(r.resolvedAt)) : ''}</span>` : '';
+      const actions = admin
+        ? `<div class="row-actions">` +
+          (resolved
+            ? `<button type="button" class="ghost-btn" data-reopen="${escapeHtml(r.id)}">${icon('refresh')} Reopen</button>`
+            : `<button type="button" class="ghost-btn" data-resolve="${escapeHtml(r.id)}">${icon('check')} Resolve</button>`) +
+          `<button type="button" class="icon-btn danger-text" data-report-delete="${escapeHtml(r.id)}" aria-label="Delete this report" title="Delete this report">${icon('trash')}</button>` +
+          `</div>`
+        : '';
       return (
-        `<div class="report-row"><div class="report-row-info">` +
-        `<strong>${kind} — ${escapeHtml(r.itemName)}</strong>` +
+        `<div class="report-row${resolved ? ' is-resolved' : ''}"><div class="report-row-info">` +
+        `<strong>${kind} — ${escapeHtml(r.itemName)}${state}</strong>` +
         `<span>${escapeHtml(r.message)}${qty}</span>` +
         `<span>By ${escapeHtml(r.name)} (${escapeHtml(r.employeeNo)}) · ${escapeHtml(fmtDateTime(r.createdAt))}</span></div>` +
-        (admin ? `<button type="button" class="ghost-btn" data-resolve="${escapeHtml(r.id)}">${icon('check')} Resolve</button>` : '') +
+        actions +
         `</div>`
       );
     })
@@ -2520,22 +2683,33 @@ async function openReportsPanel() {
   if (!admin) list.insertAdjacentHTML('beforeend', '<p class="muted-text">Unlock Admin to mark reports as resolved.</p>');
 }
 
-el('reports-list').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-resolve]');
-  if (btn) withBusy(btn, () => resolveReport(btn.dataset.resolve));
+let showResolvedReports = false;
+
+el('reports-resolved-toggle').addEventListener('click', () => {
+  showResolvedReports = !showResolvedReports;
+  openReportsPanel();
 });
 
-function resolveReport(id) {
+el('reports-list').addEventListener('click', (e) => {
+  const resolveBtn = e.target.closest('[data-resolve]');
+  const reopenBtn = e.target.closest('[data-reopen]');
+  const deleteBtn = e.target.closest('[data-report-delete]');
+  if (resolveBtn) withBusy(resolveBtn, () => setReportStatus(resolveBtn.dataset.resolve, 'resolved'));
+  else if (reopenBtn) withBusy(reopenBtn, () => setReportStatus(reopenBtn.dataset.reopen, 'open'));
+  else if (deleteBtn) requireAdminThen(() => deleteReport(deleteBtn.dataset.reportDelete));
+});
+
+function setReportStatus(id, status) {
   return new Promise((done) => {
     if (!isAdminUnlocked()) done();
     requireAdminThen(async () => {
       const res = await request(`${API.reports}?id=${encodeURIComponent(id)}`, {
         method: 'PATCH',
         admin: true,
-        body: { status: 'resolved' },
+        body: { status },
       });
       if (!res.ok) showToast(res.error, 'error');
-      else showToast('Report resolved.', 'success');
+      else showToast(status === 'resolved' ? 'Report resolved.' : 'Report reopened.', 'success');
       done();
       if (res.ok) {
         loadReportsBadge();
@@ -2543,6 +2717,23 @@ function resolveReport(id) {
       }
     });
   });
+}
+
+async function deleteReport(id) {
+  const confirmed = await confirmDialog({
+    title: 'Delete this report?',
+    message: 'The report is removed for good. Stock is not changed. This cannot be undone.',
+    confirmLabel: 'Delete report',
+  });
+  if (!confirmed) return;
+  const res = await request(`${API.reports}?id=${encodeURIComponent(id)}`, { method: 'DELETE', admin: true });
+  if (!res.ok) {
+    showToast(res.error, 'error');
+    return;
+  }
+  showToast('Report deleted.', 'success');
+  loadReportsBadge();
+  await openReportsPanel();
 }
 
 // ---------- Add / edit / remove items (admin only) ----------
@@ -2692,6 +2883,228 @@ el('remove-picker-confirm').addEventListener('click', () => {
   const item = items.find((i) => i.id === el('remove-picker-select').value);
   if (!item) return;
   requireAdminThen(() => deleteItem(item, { afterDelete: () => closeModal('remove-picker-modal') }));
+});
+
+// ---------- Admin: categories ----------
+
+let categoryRows = [];
+
+function categoryItemCount(name) {
+  return items.filter((i) => i.category === name).length;
+}
+
+function openCategoriesModal() {
+  categoryRows = categories.map((c) => ({ original: c, name: c }));
+  items.forEach((i) => {
+    if (i.category && !categoryRows.some((r) => r.original === i.category)) categoryRows.push({ original: i.category, name: i.category });
+  });
+  el('category-new').value = '';
+  setFormError('categories-form-error', '');
+  renderCategoryRows();
+  openModal('categories-modal');
+}
+
+function renderCategoryRows() {
+  el('categories-list').innerHTML = categoryRows
+    .map((r, i) => {
+      const count = r.original ? categoryItemCount(r.original) : 0;
+      const removeTitle = count ? `Move its ${plural(count, 'item', 'items')} to another category first` : 'Remove this category';
+      return (
+        `<li class="category-row">` +
+        `<input type="text" maxlength="60" value="${escapeHtml(r.name)}" data-cat-index="${i}" aria-label="Category name" required />` +
+        `<span class="category-count" title="Items in this category">${plural(count, 'item', 'items')}</span>` +
+        `<button type="button" class="icon-btn" data-cat-up="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Move up" title="Move up">↑</button>` +
+        `<button type="button" class="icon-btn" data-cat-down="${i}" ${i === categoryRows.length - 1 ? 'disabled' : ''} aria-label="Move down" title="Move down">↓</button>` +
+        `<button type="button" class="icon-btn danger-text" data-cat-remove="${i}" ${count ? 'disabled' : ''} aria-label="${escapeHtml(removeTitle)}" title="${escapeHtml(removeTitle)}">${icon('trash')}</button>` +
+        `</li>`
+      );
+    })
+    .join('');
+}
+
+el('categories-list').addEventListener('input', (e) => {
+  const index = e.target.dataset.catIndex;
+  if (index !== undefined) categoryRows[Number(index)].name = e.target.value;
+});
+
+el('categories-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn || btn.disabled) return;
+  const swap = (a, b) => {
+    [categoryRows[a], categoryRows[b]] = [categoryRows[b], categoryRows[a]];
+    renderCategoryRows();
+  };
+  if (btn.dataset.catUp) swap(Number(btn.dataset.catUp), Number(btn.dataset.catUp) - 1);
+  else if (btn.dataset.catDown) swap(Number(btn.dataset.catDown), Number(btn.dataset.catDown) + 1);
+  else if (btn.dataset.catRemove) {
+    categoryRows.splice(Number(btn.dataset.catRemove), 1);
+    renderCategoryRows();
+  }
+});
+
+function addCategoryRow() {
+  const name = el('category-new').value.trim();
+  if (!name) {
+    setFormError('categories-form-error', 'Type a name for the new category first.');
+    return;
+  }
+  if (categoryRows.some((r) => r.name.trim().toLowerCase() === name.toLowerCase())) {
+    setFormError('categories-form-error', `"${name}" is already in the list.`);
+    return;
+  }
+  setFormError('categories-form-error', '');
+  categoryRows.push({ original: null, name });
+  el('category-new').value = '';
+  renderCategoryRows();
+}
+
+el('category-add-btn').addEventListener('click', addCategoryRow);
+el('category-new').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addCategoryRow();
+  }
+});
+
+el('categories-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  withBusy(submitButton(e.currentTarget), async () => {
+    setFormError('categories-form-error', '');
+    const renames = {};
+    categoryRows.forEach((r) => {
+      if (r.original && r.name.trim() && r.name.trim() !== r.original) renames[r.original] = r.name.trim();
+    });
+    const res = await request(`${API.items}?action=categories`, {
+      method: 'POST',
+      admin: true,
+      body: { categories: categoryRows.map((r) => r.name), renames },
+    });
+    if (!res.ok) {
+      setFormError('categories-form-error', res.error);
+      return;
+    }
+    if (renames[activeCategory]) activeCategory = renames[activeCategory];
+    if (activeCategory !== 'All' && !res.data.categories.includes(activeCategory)) activeCategory = 'All';
+    closeModal('categories-modal');
+    showToast(res.data.moved ? `Categories saved — ${plural(res.data.moved, 'item', 'items')} moved with the rename.` : 'Categories saved.', 'success');
+    await loadItems({ silent: true });
+  });
+});
+
+el('categories-btn').addEventListener('click', () => requireAdminThen(openCategoriesModal));
+
+// ---------- Admin: clear old history, backup ----------
+
+let cleanupChecked = null;
+
+function cleanupBody() {
+  return {
+    before: el('cleanup-before').value,
+    activity: el('cleanup-activity').checked,
+    loans: el('cleanup-loans').checked,
+    reports: el('cleanup-reports').checked,
+  };
+}
+
+function resetCleanupPreview() {
+  cleanupChecked = null;
+  el('cleanup-preview').hidden = true;
+  el('cleanup-submit-btn').textContent = 'Check what will be cleared';
+  setFormError('cleanup-form-error', '');
+}
+
+function openCleanupModal() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 6);
+  el('cleanup-before').value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  el('cleanup-before').max = todayStr();
+  ['cleanup-activity', 'cleanup-loans', 'cleanup-reports'].forEach((id) => (el(id).checked = true));
+  resetCleanupPreview();
+  openModal('cleanup-modal');
+}
+
+el('cleanup-form').addEventListener('input', resetCleanupPreview);
+el('cleanup-form').addEventListener('change', resetCleanupPreview);
+
+el('cleanup-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const body = cleanupBody();
+  const key = JSON.stringify(body);
+  withBusy(el('cleanup-submit-btn'), async () => {
+    setFormError('cleanup-form-error', '');
+    if (cleanupChecked !== key) {
+      const res = await request(`${API.admin}?action=cleanup`, { method: 'POST', admin: true, body: { ...body, dryRun: true } });
+      if (!res.ok) {
+        setFormError('cleanup-form-error', res.error);
+        return;
+      }
+      const n = res.data.removed;
+      const total = n.activity + n.loans + n.reports;
+      const preview = el('cleanup-preview');
+      preview.hidden = false;
+      if (total === 0) {
+        preview.textContent = `Nothing from before ${fmtDate(body.before)} to clear.`;
+        return;
+      }
+      const parts = [];
+      if (body.activity) parts.push(plural(n.activity, 'activity record', 'activity records'));
+      if (body.loans) parts.push(plural(n.loans, 'returned loan', 'returned loans'));
+      if (body.reports) parts.push(plural(n.reports, 'resolved report', 'resolved reports'));
+      preview.textContent = `From before ${fmtDate(body.before)}: ${parts.join(', ')}. Stock quantities stay as they are.`;
+      cleanupChecked = key;
+      el('cleanup-submit-btn').textContent = `Clear ${plural(total, 'record', 'records')}`;
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: 'Clear this history for good?',
+      message: `${el('cleanup-preview').textContent} This cannot be undone — download a backup first if you may need it.`,
+      confirmLabel: 'Clear history',
+    });
+    if (!confirmed) return;
+    const res = await request(`${API.admin}?action=cleanup`, { method: 'POST', admin: true, body });
+    if (!res.ok) {
+      setFormError('cleanup-form-error', res.error);
+      return;
+    }
+    const n = res.data.removed;
+    closeModal('cleanup-modal');
+    showToast(`Cleared ${plural(n.activity + n.loans + n.reports, 'record', 'records')}.`, 'success');
+    loadReportsBadge();
+  });
+});
+
+el('cleanup-btn').addEventListener('click', () => requireAdminThen(openCleanupModal));
+
+async function downloadBackup() {
+  const res = await request(`${API.admin}?action=backup`, { admin: true });
+  if (!res.ok) {
+    showToast(`Could not make the backup. ${res.error}`, 'error');
+    return;
+  }
+  const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `vitrox-store-backup-${todayStr()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  const d = res.data;
+  showToast(
+    `Backup downloaded: ${plural(d.items.length, 'item', 'items')}, ${plural(d.transactions.length, 'activity record', 'activity records')}, ` +
+      `${plural(d.loans.length, 'loan', 'loans')}, ${plural(d.reports.length, 'report', 'reports')}. Photos stay on the site.`,
+    'success'
+  );
+}
+
+el('backup-btn').addEventListener('click', (e) => {
+  const btn = e.currentTarget;
+  requireAdminThen(() => withBusy(btn, downloadBackup));
+});
+el('cleanup-backup-btn').addEventListener('click', (e) => {
+  const btn = e.currentTarget;
+  withBusy(btn, downloadBackup);
 });
 
 // ---------- CSV exports ----------

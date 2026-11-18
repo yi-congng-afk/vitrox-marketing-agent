@@ -9,24 +9,6 @@ const CATEGORIES = [
   'Promotional Items',
 ];
 
-// Maps each original seed item's id to its category under the new list above,
-// so items already saved under the old 5-category scheme get corrected on read
-// instead of silently disappearing from every category filter.
-const LEGACY_CATEGORY_BY_SEED_ID = {
-  itm_seed_1: 'Merchandise', // Goodies Bag
-  itm_seed_2: 'Marketing Materials', // Programme Flyers
-  itm_seed_3: 'Tabletop Display & Accessories', // L-shaped File
-  itm_seed_4: 'Tabletop Display & Accessories', // Grey Files
-  itm_seed_5: 'Event & Display Equipment', // Roll-up Stand Bunting
-  itm_seed_6: 'Event & Display Equipment', // A4 Standee
-  itm_seed_7: 'Tabletop Display & Accessories', // Table Cloth
-  itm_seed_8: 'Promotional Items', // Pen
-  itm_seed_9: 'Event & Display Equipment', // Stand Backdrop
-  itm_seed_10: 'Event & Display Equipment', // Table
-  itm_seed_11: 'Event & Display Equipment', // Chair
-  itm_seed_12: 'Event & Display Equipment', // Foldable Desktop
-};
-
 const SEED_ITEMS = [
   { name: 'Goodies Bag', category: 'Merchandise', unit: 'pcs', quantity: 0, lowStockThreshold: 20 },
   { name: 'Programme Flyers', category: 'Marketing Materials', unit: 'pcs', quantity: 0, lowStockThreshold: 50 },
@@ -97,6 +79,17 @@ async function getConfig() {
 
 async function saveConfig(config) {
   await configStore().setJSON('config', config);
+}
+
+// The category list starts as CATEGORIES above; once an admin edits it, the
+// edited list is kept here instead.
+async function getCategories() {
+  const saved = await configStore().get('categories', { type: 'json' });
+  return Array.isArray(saved) && saved.length ? saved : CATEGORIES.slice();
+}
+
+async function saveCategories(list) {
+  await configStore().setJSON('categories', list);
 }
 
 // Overdue-reminder bookkeeping lives in its own key (not on the loan records), so
@@ -214,14 +207,6 @@ async function getItems() {
   const migrated = data.map((item) => {
     let next = item;
 
-    if (!CATEGORIES.includes(next.category)) {
-      const fixedCategory = LEGACY_CATEGORY_BY_SEED_ID[next.id];
-      if (fixedCategory) {
-        changed = true;
-        next = { ...next, category: fixedCategory };
-      }
-    }
-
     if (next.returnable === undefined || next.quantityOnLoan === undefined) {
       changed = true;
       next = { ...next, returnable: Boolean(next.returnable), quantityOnLoan: next.quantityOnLoan || 0 };
@@ -229,13 +214,6 @@ async function getItems() {
 
     return next;
   });
-
-  const rackStandSeed = SEED_ITEMS.find((i) => i.name === 'Rack Stand');
-  const hasRackStand = migrated.some((i) => i.name.trim().toLowerCase() === 'rack stand');
-  if (rackStandSeed && !hasRackStand) {
-    migrated.push(rackStandSeed);
-    changed = true;
-  }
 
   if (changed) await saveItems(migrated);
   return migrated;
@@ -289,6 +267,8 @@ module.exports = {
   genId,
   getConfig,
   saveConfig,
+  getCategories,
+  saveCategories,
   getReminderLog,
   saveReminderLog,
   getProfile,

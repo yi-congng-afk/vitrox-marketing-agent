@@ -92,6 +92,15 @@
         <button id="remove-item-btn" class="ghost-btn admin-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Remove Item
         </button>
+        <button id="categories-btn" class="ghost-btn admin-only" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-pencil"/></svg> Categories
+        </button>
+        <button id="cleanup-btn" class="ghost-btn admin-only" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Clear Old History
+        </button>
+        <button id="backup-btn" class="ghost-btn admin-only" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Backup
+        </button>
         <button id="require-signin-btn" class="ghost-btn admin-only" type="button" hidden></button>
       </div>
 
@@ -411,6 +420,78 @@
   </div>
 
   <!-- Report issue modal -->
+  <div id="edit-loan-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="edit-loan-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="edit-loan-title">Edit Loan Record</h2>
+      <p class="subtitle"><strong id="edit-loan-item"></strong> — admin only. The item's "on loan" count follows any change to the quantities.</p>
+      <form id="edit-loan-form">
+        <div class="form-row">
+          <label>Quantity borrowed <input id="edit-loan-quantity" type="number" inputmode="numeric" min="1" step="1" required /></label>
+          <label>Returned so far <input id="edit-loan-returned" type="number" inputmode="numeric" min="0" step="1" required /></label>
+        </div>
+        <div class="form-row">
+          <label>Borrowed by <input id="edit-loan-name" type="text" required /></label>
+          <label>Employee number <input id="edit-loan-employee-no" type="text" required /></label>
+        </div>
+        <label>Email (for return reminders) <input id="edit-loan-email" type="email" placeholder="name@vitrox.com" autocomplete="off" /></label>
+        <div class="form-row">
+          <label>Purpose / event <input id="edit-loan-purpose" type="text" required /></label>
+          <label>Due back <input id="edit-loan-due" type="date" /></label>
+        </div>
+        <p id="edit-loan-form-error" class="error-text" role="alert" hidden></p>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Save</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="categories-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="categories-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="categories-title">Categories</h2>
+      <p class="subtitle">Rename, reorder, add or remove categories. Renaming moves its items too. A category can only be removed once it has no items.</p>
+      <form id="categories-form">
+        <ul id="categories-list" class="categories-list"></ul>
+        <div class="category-add">
+          <input id="category-new" type="text" maxlength="60" placeholder="New category name" aria-label="New category name" />
+          <button id="category-add-btn" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add</button>
+        </div>
+        <p id="categories-form-error" class="error-text" role="alert" hidden></p>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Save categories</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="cleanup-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="cleanup-title">Clear Old History</h2>
+      <p class="subtitle">Removes old records to keep the store tidy. Stock quantities are not changed. Loans still out and open reports are always kept.</p>
+      <form id="cleanup-form">
+        <label>Clear records from before <input id="cleanup-before" type="date" required /></label>
+        <fieldset class="cleanup-kinds">
+          <legend>What to clear</legend>
+          <label class="checkbox-label"><input id="cleanup-activity" type="checkbox" checked /> <span>Activity log (add-ons and move-outs of consumables)</span></label>
+          <label class="checkbox-label"><input id="cleanup-loans" type="checkbox" checked /> <span>Loan records that are fully returned</span></label>
+          <label class="checkbox-label"><input id="cleanup-reports" type="checkbox" checked /> <span>Resolved reports</span></label>
+        </fieldset>
+        <p id="cleanup-preview" class="reminder-box" hidden></p>
+        <p class="fine-print">Tip: press <button id="cleanup-backup-btn" type="button" class="link-btn">Download backup</button> first, so you keep a copy of everything.</p>
+        <p id="cleanup-form-error" class="error-text" role="alert" hidden></p>
+        <div class="form-actions">
+          <button id="cleanup-submit-btn" type="submit" class="danger-btn">Check what will be cleared</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="report-modal" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="report-modal-title" tabindex="-1">
       <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
@@ -447,7 +528,10 @@
       <div id="low-stock-list-panel"></div>
       <div id="overdue-loans-panel"></div>
       <div id="reminder-status" class="admin-only"></div>
-      <h3>Open reports</h3>
+      <div class="section-head">
+        <h3 id="reports-heading">Open reports</h3>
+        <button id="reports-resolved-toggle" type="button" class="link-btn admin-only" hidden>Show resolved</button>
+      </div>
       <div id="reports-list"></div>
       <h3>Recent move-outs</h3>
       <div id="recent-moveouts"></div>

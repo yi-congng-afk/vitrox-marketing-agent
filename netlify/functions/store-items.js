@@ -1,7 +1,8 @@
 const { requireAdmin } = require('./_shared/store-auth');
 const {
-  CATEGORIES,
   getItems,
+  getCategories,
+  saveCategories,
   saveItems,
   genId,
   IMAGE_FIELDS,
@@ -13,6 +14,54 @@ const {
 const { checkAccess } = require('./_shared/store-access');
 
 const REQUIRED_FIELDS = ['name', 'category'];
+const MAX_CATEGORY_LENGTH = 60;
+
+function json(statusCode, payload) {
+  return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
+}
+
+// Admin: replace the category list. body = { categories: [names in order],
+// renames: { oldName: newName } }. Items in a renamed category move with it;
+// a category that still has items can't be dropped.
+async function updateCategories(body) {
+  const list = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(body.categories) ? body.categories : []) {
+    const name = String(raw || '').trim().replace(/\s+/g, ' ');
+    if (!name) continue;
+    if (name.length > MAX_CATEGORY_LENGTH) return json(400, { error: `"${name.slice(0, 20)}…" is too long (${MAX_CATEGORY_LENGTH} characters at most)` });
+    if (seen.has(name.toLowerCase())) return json(400, { error: `"${name}" is listed twice` });
+    seen.add(name.toLowerCase());
+    list.push(name);
+  }
+  if (list.length === 0) return json(400, { error: 'Keep at least one category' });
+
+  const renames = body.renames && typeof body.renames === 'object' ? body.renames : {};
+  const items = await getItems();
+  let moved = 0;
+  for (const item of items) {
+    const target = renames[item.category];
+    if (typeof target === 'string' && list.includes(target.trim().replace(/\s+/g, ' '))) {
+      item.category = target.trim().replace(/\s+/g, ' ');
+      item.updatedAt = new Date().toISOString();
+      moved++;
+    }
+  }
+  const stranded = {};
+  items.forEach((i) => {
+    if (!list.includes(i.category)) stranded[i.category] = (stranded[i.category] || 0) + 1;
+  });
+  const names = Object.keys(stranded);
+  if (names.length) {
+    return json(400, {
+      error: names.map((n) => `"${n}" still has ${stranded[n]} item${stranded[n] === 1 ? '' : 's'}`).join('; ') + ' — move them to another category first',
+    });
+  }
+
+  if (moved) await saveItems(items);
+  await saveCategories(list);
+  return json(200, { categories: list, items, moved });
+}
 
 // Photo fields arrive as: the URL the item already has (unchanged), a freshly
 // picked photo as a data: URL (store it, keep its URL), or empty (removed).
@@ -72,12 +121,22 @@ exports.handler = async (event) => {
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, categories: CATEGORIES }),
+      body: JSON.stringify({ items, categories: await getCategories() }),
     };
   }
 
   const adminError = requireAdmin(event);
   if (adminError) return adminError;
+
+  if (method === 'POST' && event.queryStringParameters && event.queryStringParameters.action === 'categories') {
+    let body;
+    try {
+      body = JSON.parse(event.body || '{}') || {};
+    } catch {
+      return json(400, { error: 'Invalid request body' });
+    }
+    return updateCategories(body);
+  }
 
   if (method === 'POST') {
     let body;
@@ -141,6 +200,11 @@ exports.handler = async (event) => {
     if (index === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Item not found' }) };
 
     const updated = sanitizeItem(body, items[index]);
+    if (updated.quantity < (items[index].quantityOnLoan || 0)) {
+      return json(400, {
+        error: `${items[index].quantityOnLoan} of "${items[index].name}" are out on loan, so the total can't be set below ${items[index].quantityOnLoan}`,
+      });
+    }
     updated.updatedAt = new Date().toISOString();
     let replacedImages;
     try {

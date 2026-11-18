@@ -1519,3 +1519,24 @@ button.low-stock-row:hover { background: var(--accent-soft); }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Admin: categories, clear history, report and loan actions ---------- */
+
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.section-head h3 { margin-bottom: 0.65rem; }
+.report-row .row-actions, .moveout-row > .icon-btn { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+.report-row.is-resolved .report-row-info strong { color: var(--text-muted); }
+.report-row-info .qty-pill { display: inline-block; font-size: 0.7rem; vertical-align: 0.1em; }
+.loans-table .row-actions { white-space: nowrap; }
+.loans-table .row-actions .icon-btn { vertical-align: middle; }
+
+.categories-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.4rem; }
+.category-row { display: flex; align-items: center; gap: 0.35rem; }
+.category-row input { flex: 1; min-width: 0; }
+.category-count { color: var(--text-muted); font-size: 0.75rem; white-space: nowrap; min-width: 3.6rem; text-align: right; }
+.category-row .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.category-add { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+.category-add input { flex: 1; min-width: 0; }
+
+.cleanup-kinds { border: none; padding: 0; margin: 0.25rem 0 0.75rem; display: grid; gap: 0.4rem; }
+.cleanup-kinds legend { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }

@@ -104,5 +104,20 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report: reports[index] }) };
   }
 
+  if (method === 'DELETE') {
+    const adminError = requireAdmin(event);
+    if (adminError) return adminError;
+
+    const id = event.queryStringParameters && event.queryStringParameters.id;
+    if (!id) return { statusCode: 400, body: JSON.stringify({ error: 'Missing id query parameter' }) };
+
+    const reports = await getReports();
+    const index = reports.findIndex((r) => r.id === id);
+    if (index === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Report not found' }) };
+    const [removed] = reports.splice(index, 1);
+    await saveReports(reports);
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report: removed }) };
+  }
+
   return { statusCode: 405, body: 'Method Not Allowed' };
 };
