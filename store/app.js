@@ -2342,15 +2342,143 @@ el('low-stock-list-panel').addEventListener('click', (e) => {
   if (row) openDetail(row.dataset.itemId);
 });
 
+// ---- Recent move-outs: one row per checkout, e.g. "x@vitrox.com moved out
+// Goodies Bag × 1000, Programme Flyers × 100 — for Open Day" ----
+
+const MOVEOUT_DAYS = 14;
+const MOVEOUT_MAX = 20;
+
+function groupMoveOuts(transactions, loans) {
+  const groups = new Map();
+  const add = (key, at, who, purpose, line) => {
+    if (!groups.has(key)) groups.set(key, { at, who, purpose, lines: [] });
+    groups.get(key).lines.push(line);
+  };
+  transactions
+    .filter((t) => t.type === 'remove')
+    .forEach((t) => add(t.checkoutId || t.id, t.timestamp, t, t.remarks, { name: t.itemName, qty: t.quantity }));
+  loans.forEach((l) =>
+    add(l.checkoutId || l.id, l.loanedAt, l, l.purpose, { name: l.itemName, qty: l.quantity, due: l.expectedReturnDate })
+  );
+  const since = Date.now() - MOVEOUT_DAYS * 86400000;
+  return [...groups.values()]
+    .filter((g) => new Date(g.at).getTime() >= since)
+    .sort((a, b) => new Date(b.at) - new Date(a.at))
+    .slice(0, MOVEOUT_MAX);
+}
+
+function renderMoveOuts(transactions, loans) {
+  const box = el('recent-moveouts');
+  if (!transactions || !loans) {
+    box.innerHTML = '<p class="muted-text">Could not load recent move-outs.</p>';
+    return;
+  }
+  const groups = groupMoveOuts(transactions, loans);
+  if (groups.length === 0) {
+    box.innerHTML = `<p class="muted-text">Nothing moved out in the last ${MOVEOUT_DAYS} days.</p>`;
+    return;
+  }
+  box.innerHTML = groups
+    .map((g) => {
+      const w = g.who;
+      const headline = w.email || w.name || 'Someone';
+      const person = w.email ? `${w.name} (${w.employeeNo})` : `(${w.employeeNo})`;
+      const lines = g.lines
+        .map((l) => `${escapeHtml(l.name)} × ${escapeHtml(l.qty)}${'due' in l ? ' <span class="moveout-loan">loan</span>' : ''}`)
+        .join(', ');
+      const dues = [...new Set(g.lines.filter((l) => l.due).map((l) => l.due))].sort();
+      const returnBy = dues.length ? ` · return by ${dues.map((d) => escapeHtml(fmtDate(d))).join(', ')}` : '';
+      return (
+        `<div class="report-row moveout-row"><div class="report-row-info">` +
+        `<strong>${escapeHtml(headline)} <span class="moveout-verb">moved out</span> ${lines}</strong>` +
+        `<span>For ${escapeHtml(g.purpose || '—')}${returnBy} · ${escapeHtml(person)} · ${escapeHtml(fmtDateTime(g.at))}</span>` +
+        `</div></div>`
+      );
+    })
+    .join('');
+}
+
+// ---- Overdue reminder emails (admin view) ----
+
+function renderReminderStatus(res) {
+  const box = el('reminder-status');
+  if (!isAdminUnlocked()) {
+    box.innerHTML = '';
+    return;
+  }
+  if (!res || !res.ok) {
+    box.innerHTML = `<div class="reminder-box"><p>Could not check the reminder emails. ${escapeHtml((res && res.error) || '')}</p></div>`;
+    return;
+  }
+  const { emailReady, everyDays, lastRun } = res.data;
+  let status;
+  if (!emailReady) {
+    status =
+      `<strong>${icon('bell')} Reminder emails are off.</strong> ` +
+      `The email (SMTP) settings have not been added to Netlify yet, so no emails are sent — not for overdue loans, and not for low stock. ` +
+      `Overdue loans are still listed above.`;
+  } else {
+    const last = lastRun
+      ? `Last run ${escapeHtml(fmtDateTime(lastRun.at))}: ` +
+        (lastRun.due === 0
+          ? 'nobody was due a reminder.'
+          : `${plural(lastRun.peopleEmailed, 'person', 'people')} emailed` +
+            (lastRun.failed ? `, ${plural(lastRun.failed, 'email', 'emails')} failed` : '') +
+            (lastRun.noEmail ? `, ${plural(lastRun.noEmail, 'loan', 'loans')} with no email on record` : '') +
+            (lastRun.adminNotified ? ' — summary sent to the admin.' : '.'))
+      : 'It has not run yet.';
+    status =
+      `<strong>${icon('bell')} Reminder emails are on.</strong> ` +
+      `Every day at 9:00 am, people with overdue items are emailed (again every ${escapeHtml(everyDays)} days until returned), ` +
+      `and the admin gets a summary. ${last}`;
+  }
+  box.innerHTML =
+    `<div class="reminder-box"><p>${status}</p>` +
+    (emailReady ? `<button type="button" id="send-reminders-btn" class="ghost-btn">${icon('bell')} Send reminders now</button>` : '') +
+    `</div>`;
+}
+
+el('reminder-status').addEventListener('click', (e) => {
+  const btn = e.target.closest('#send-reminders-btn');
+  if (!btn) return;
+  withBusy(btn, async () => {
+    const res = await request(`${API.loans}?action=remind`, { method: 'POST', admin: true, body: {} });
+    if (!res.ok) {
+      showToast(res.error, 'error');
+      return;
+    }
+    const r = res.data.lastRun;
+    showToast(
+      !r.emailReady
+        ? 'Email is not set up yet, so no reminders were sent.'
+        : r.due === 0
+        ? 'Nobody is due a reminder right now (each person is reminded at most every few days).'
+        : `Reminders sent to ${plural(r.peopleEmailed, 'person', 'people')}.`,
+      r.failed ? 'error' : 'success'
+    );
+    renderReminderStatus(res);
+  });
+});
+
 async function openReportsPanel() {
   renderLowStockPanel();
   el('overdue-loans-panel').innerHTML = '';
+  el('reminder-status').innerHTML = '';
   el('reports-list').innerHTML = '<p class="muted-text">Loading…</p>';
+  el('recent-moveouts').innerHTML = '<p class="muted-text">Loading…</p>';
   openModal('reports-panel-modal');
 
-  const [loans, reports] = await Promise.all([request(`${API.loans}?status=open`), request(`${API.reports}?status=open`)]);
+  const admin = isAdminUnlocked();
+  const [allLoans, reports, txns, reminders] = await Promise.all([
+    request(API.loans),
+    request(`${API.reports}?status=open`),
+    request(API.txns),
+    admin ? request(`${API.loans}?view=reminders`, { admin: true }) : null,
+  ]);
+  renderMoveOuts(txns.ok ? txns.data.transactions || [] : null, allLoans.ok ? allLoans.data.loans || [] : null);
+  renderReminderStatus(reminders);
 
-  const overdue = loans.ok ? (loans.data.loans || []).filter(isOverdue) : [];
+  const overdue = allLoans.ok ? (allLoans.data.loans || []).filter(isOverdue) : [];
   const today = parseYmd(todayStr());
   el('overdue-loans-panel').innerHTML = overdue.length
     ? `<h3>Overdue loans</h3>${overdue
@@ -2375,7 +2503,6 @@ async function openReportsPanel() {
     list.innerHTML = '<p class="muted-text">No open reports.</p>';
     return;
   }
-  const admin = isAdminUnlocked();
   list.innerHTML = open
     .map((r) => {
       const kind = r.type === 'damage' ? `${icon('flag')} Damaged` : `${icon('package')} Restock request`;

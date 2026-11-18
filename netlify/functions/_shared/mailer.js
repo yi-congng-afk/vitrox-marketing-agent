@@ -21,24 +21,34 @@ function getTransporter() {
   return cachedTransporter;
 }
 
-async function sendAlertEmail(subject, text) {
+function emailConfigured() {
+  return Boolean(getTransporter());
+}
+
+function adminEmail() {
+  return process.env.ALERT_EMAIL_TO || 'yi-cong.ng@vitrox.com';
+}
+
+// Never throws: a store action must not fail because an email could not go out.
+// Returns { sent: true } or { sent: false, reason }.
+async function sendEmail({ to, subject, text }) {
   const transporter = getTransporter();
   if (!transporter) {
     console.log('SMTP not configured (SMTP_HOST/SMTP_USER/SMTP_PASS missing) — skipping email:', subject);
-    return;
+    return { sent: false, reason: 'not_configured' };
   }
-
-  const to = process.env.ALERT_EMAIL_TO || 'yi-cong.ng@vitrox.com';
   try {
-    await transporter.sendMail({
-      from: process.env.SMTP_USER,
-      to,
-      subject,
-      text,
-    });
+    await transporter.sendMail({ from: process.env.SMTP_USER, to, subject, text });
+    return { sent: true };
   } catch (err) {
-    console.error('Failed to send alert email:', err.message);
+    console.error('Failed to send email:', subject, err.message);
+    return { sent: false, reason: 'failed', message: err.message };
   }
 }
 
-module.exports = { sendAlertEmail };
+// Store alerts (low stock, damage reports, overdue summaries) go to the admin.
+function sendAlertEmail(subject, text) {
+  return sendEmail({ to: adminEmail(), subject, text });
+}
+
+module.exports = { sendEmail, sendAlertEmail, emailConfigured, adminEmail };

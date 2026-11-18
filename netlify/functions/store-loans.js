@@ -1,15 +1,37 @@
 const { requireAdmin } = require('./_shared/store-auth');
-const { getItems, saveItems, getLoans, saveLoans, genId } = require('./_shared/store-blobs');
+const { getItems, saveItems, getLoans, saveLoans, getReminderLog, genId } = require('./_shared/store-blobs');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
+const { runReminders, REMIND_EVERY_DAYS } = require('./_shared/reminders');
+const { emailConfigured } = require('./_shared/mailer');
+
+function json(statusCode, payload) {
+  return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
+}
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
+  const params = event.queryStringParameters || {};
 
   const access = await checkAccess(event);
   if (access.response) return access.response;
 
+  // Overdue reminder emails (admin only): GET ?view=reminders shows the last
+  // run, POST ?action=remind runs it now (same rules as the daily run).
+  if (params.view === 'reminders' || params.action === 'remind') {
+    const adminError = requireAdmin(event);
+    if (adminError) return adminError;
+    if (method === 'GET' && params.view === 'reminders') {
+      const log = await getReminderLog();
+      return json(200, { emailReady: emailConfigured(), everyDays: REMIND_EVERY_DAYS, lastRun: log.lastRun || null });
+    }
+    if (method === 'POST' && params.action === 'remind') {
+      const lastRun = await runReminders({ trigger: 'admin' });
+      return json(200, { emailReady: lastRun.emailReady, everyDays: REMIND_EVERY_DAYS, lastRun });
+    }
+    return { statusCode: 405, body: 'Method Not Allowed' };
+  }
+
   if (method === 'GET') {
-    const params = event.queryStringParameters || {};
     let loans = await getLoans();
     if (params.itemId) loans = loans.filter((l) => l.itemId === params.itemId);
     if (params.status) loans = loans.filter((l) => l.status === params.status);

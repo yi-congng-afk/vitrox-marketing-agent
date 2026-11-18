@@ -1207,6 +1207,30 @@ button.low-stock-row { cursor: pointer; border-radius: 0; }
 button.low-stock-row:hover { background: var(--accent-soft); }
 
 .report-row-info, .low-stock-row > span:first-child { min-width: 0; flex: 1; }
+
+.moveout-row strong { font-weight: 500; }
+.report-row-info .moveout-verb { display: inline; font-size: inherit; color: var(--text-muted); font-weight: 400; }
+.report-row-info .moveout-loan {
+  display: inline-block;
+  background: var(--sky);
+  color: var(--sky-text);
+  border-radius: 999px;
+  padding: 0 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.reminder-box {
+  background: var(--sky-soft);
+  border: 1px solid var(--sky);
+  color: var(--sky-text);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  margin: 0.5rem 0 0.75rem;
+  font-size: 0.85rem;
+}
+.reminder-box p { margin: 0 0 0.5rem; }
+.reminder-box p:last-child { margin-bottom: 0; }
+.reminder-box .icon { vertical-align: -0.15em; }
 .report-row-info strong, .low-stock-row strong { display: block; overflow-wrap: anywhere; }
 .report-row-info span, .low-stock-row small {
   display: block;

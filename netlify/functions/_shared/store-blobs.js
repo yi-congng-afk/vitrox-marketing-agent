@@ -99,6 +99,16 @@ async function saveConfig(config) {
   await configStore().setJSON('config', config);
 }
 
+// Overdue-reminder bookkeeping lives in its own key (not on the loan records), so
+// the daily reminder run can never overwrite a return saved at the same moment.
+async function getReminderLog() {
+  return (await configStore().get('reminders', { type: 'json' })) || { byLoan: {}, lastRun: null };
+}
+
+async function saveReminderLog(log) {
+  await configStore().setJSON('reminders', log);
+}
+
 // One small blob per person, so two people signing in at the same moment can
 // never overwrite each other's details.
 async function getProfile(key) {
@@ -279,6 +289,8 @@ module.exports = {
   genId,
   getConfig,
   saveConfig,
+  getReminderLog,
+  saveReminderLog,
   getProfile,
   saveProfile,
   IMAGE_FIELDS,

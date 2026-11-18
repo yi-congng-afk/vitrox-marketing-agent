@@ -5,6 +5,10 @@
 [functions]
   node_bundler = "esbuild"
 
+# Overdue-loan reminder emails: every day at 09:00 Malaysia time (01:00 UTC).
+[functions."store-reminders"]
+  schedule = "0 1 * * *"
+
 # The dashboard used to live under /store/ — keep old bookmarks working.
 [[redirects]]
   from = "/store"
