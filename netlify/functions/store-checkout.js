@@ -5,6 +5,8 @@ const {
   saveTransactions,
   getLoans,
   saveLoans,
+  getBookings,
+  saveBookings,
   genId,
 } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
@@ -184,6 +186,23 @@ exports.handler = async (event) => {
     newLoans.length > 0 ? saveLoans(loans.concat(newLoans)) : null,
   ]);
 
+  // Moving out a booked event's items: the booking is now collected, so it
+  // stops holding those items (the loans / move-outs take over from here).
+  let booking = null;
+  if (body.bookingId) {
+    try {
+      const bookings = await getBookings();
+      const found = bookings.find((b) => b.id === body.bookingId && b.status === 'booked');
+      if (found) {
+        Object.assign(found, { status: 'collected', collectedAt: now, checkoutId, collectedBy: who.email || who.name });
+        await saveBookings(bookings);
+        booking = found;
+      }
+    } catch {
+      // The move-out itself is recorded; the booking can be cancelled by hand.
+    }
+  }
+
   if (crossedLowStock.length > 0) {
     await sendAlertEmail(
       `[ViTrox Store] Low stock: ${crossedLowStock.map((i) => i.name).join(', ')}`,
@@ -195,5 +214,5 @@ exports.handler = async (event) => {
     );
   }
 
-  return json(201, { checkoutId, transactions: newTransactions, loans: newLoans });
+  return json(201, { checkoutId, transactions: newTransactions, loans: newLoans, booking });
 };

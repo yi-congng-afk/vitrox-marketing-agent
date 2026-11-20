@@ -8,6 +8,7 @@ const API = {
   checkout: '/.netlify/functions/store-checkout',
   session: '/.netlify/functions/store-session',
   admin: '/.netlify/functions/store-admin',
+  bookings: '/.netlify/functions/store-bookings',
 };
 
 // Public identifier of this site's "Sign in with Google" client (not a secret).
@@ -20,6 +21,8 @@ const CART_KEY = 'vitroxStoreCart';
 const USER_KEY = 'vitroxStoreUser';
 const ITEMS_CACHE_KEY = 'vitroxStoreItemsCache';
 const SESSION_KEY = 'vitroxStoreSession';
+// The booking whose items are in the cart (from "Move out" on a booking).
+const CART_BOOKING_KEY = 'vitroxStoreCartBooking';
 
 let items = [];
 let categories = [];
@@ -272,6 +275,7 @@ function updateGate() {
     if (!itemsLoaded) renderSkeleton();
     loadItems({ silent: true });
     loadReportsBadge();
+    loadBookings();
   }
 }
 
@@ -1598,6 +1602,7 @@ function renderDetail(item, { resetQty }) {
   setDetailPhoto('item', item.itemImage, `Photo of ${item.name}`);
   setDetailPhoto('location', item.locationImage, `Where ${item.name} is kept`);
   renderDetailStock(item, resetQty);
+  renderDetailBookings(item);
 }
 
 async function openDetail(itemId) {
@@ -1607,6 +1612,10 @@ async function openDetail(itemId) {
   selectedItemId = itemId;
   renderDetail(item, { resetQty: true });
   openModal('detail-modal');
+  loadBookings().then((ok) => {
+    const current = items.find((i) => i.id === itemId);
+    if (ok && current && selectedItemId === itemId && !el('detail-modal').hidden) renderDetailBookings(current);
+  });
   await loadHistory(itemId, { showLoading: fresh });
 }
 
@@ -1804,9 +1813,26 @@ el('txn-form').addEventListener('submit', (e) => {
 
 // ---------- Cart + checkout (the only way stock is moved out) ----------
 
+// 'now' = move the items out now; 'book' = reserve them for an event's dates.
+let cartMode = 'now';
+let cartBookingId = (() => {
+  const stored = readStored(CART_BOOKING_KEY, null);
+  return typeof stored === 'string' && cart.length > 0 ? stored : null;
+})();
+// Set after the server warned about a clash: the same booking sent again is "Book anyway".
+let clashAckKey = null;
+
 function saveCart() {
+  if (cart.length === 0) cartBookingId = null;
   writeStored(CART_KEY, cart);
+  writeStored(CART_BOOKING_KEY, cartBookingId);
   setBadge('cart-badge', cart.length);
+}
+
+// Most of an item one cart line can hold: what is free now, or (when booking
+// for later) everything the store owns.
+function cartLineMax(item) {
+  return cartMode === 'book' ? Math.max(0, item.quantity || 0) : availableQty(item);
 }
 
 function cartQty(itemId) {
@@ -1838,7 +1864,7 @@ function addToCart(itemId, rawQuantity) {
   }
 
   const unit = item.unit || 'pcs';
-  const available = availableQty(item);
+  const available = cartLineMax(item);
   const already = cartQty(itemId);
   if (already + quantity > available) {
     showToast(
@@ -1877,13 +1903,19 @@ function renderCart() {
   el('cart-empty').hidden = cart.length > 0;
   el('checkout-form').hidden = cart.length === 0;
 
+  const booking = cartMode === 'book';
   cart.forEach((line) => {
     const item = items.find((i) => i.id === line.itemId);
     if (!item) return;
-    const available = availableQty(item);
+    const available = cartLineMax(item);
     const unit = item.unit || 'pcs';
     const name = escapeHtml(item.name);
-    const warning = cartLineWarning(line, available);
+    const warning = booking
+      ? line.quantity > available
+        ? `The store only has ${available} in total.`
+        : ''
+      : cartLineWarning(line, available);
+    const headsUp = booking ? '' : bookingHeadsUp(item, line.quantity);
 
     const thumb = item.itemImage
       ? `<img class="cart-line-thumb" src="${escapeHtml(item.itemImage)}" alt="" loading="lazy" decoding="async" />`
@@ -1895,10 +1927,12 @@ function renderCart() {
     row.innerHTML =
       thumb +
       `<div class="line-info"><strong>${name}</strong>` +
-      `<div class="line-meta">${available} ${escapeHtml(unit)} available` +
+      `<div class="line-meta">${available} ${escapeHtml(unit)} ${booking ? 'in the store' : 'available'}` +
       (item.returnable ? `<span class="on-loan-tag">${icon('return')} Loan — must return</span>` : '') +
       `</div>` +
-      `<div class="line-warning"${warning ? '' : ' hidden'}>${escapeHtml(warning)}</div></div>` +
+      `<div class="line-warning"${warning ? '' : ' hidden'}>${escapeHtml(warning)}</div>` +
+      (headsUp ? `<div class="line-booked">${icon('calendar')}<span>${escapeHtml(headsUp)}</span></div>` : '') +
+      `</div>` +
       `<span class="stepper">` +
       `<button type="button" class="step-btn" data-step="-1" aria-label="Decrease quantity">${icon('minus')}</button>` +
       `<input type="number" inputmode="numeric" min="1" max="${Math.max(available, 1)}" step="1" value="${line.quantity}" aria-label="Quantity of ${name}" />` +
@@ -1909,16 +1943,75 @@ function renderCart() {
   });
 
   const loanable = cartLoanableItems();
-  const hasLoanable = loanable.length > 0;
+  const hasLoanable = loanable.length > 0 && !booking;
   el('checkout-return-label').hidden = !hasLoanable;
   el('checkout-return-date').required = hasLoanable;
   const note = el('checkout-loan-note');
   note.hidden = !hasLoanable;
   note.innerHTML = hasLoanable
-    ? `${icon('return')}<span>${escapeHtml(loanable.map((i) => i.name).join(', '))} will be recorded as on loan under your name until returned (Loan Records → Return).</span>`
+    ? `${icon('return')}<span>${escapeHtml(loanable.map((i) => i.name).join(', '))} will be recorded as on loan under your name until returned (Loans &amp; Bookings → Return).</span>`
     : '';
-  el('checkout-submit-btn').innerHTML = `${icon('check')} Checkout ${plural(cart.length, 'item', 'items')}`;
+
+  el('cart-mode-now').classList.toggle('active', !booking);
+  el('cart-mode-now').setAttribute('aria-pressed', String(!booking));
+  el('cart-mode-book').classList.toggle('active', booking);
+  el('cart-mode-book').setAttribute('aria-pressed', String(booking));
+  el('cart-mode-hint').textContent = booking
+    ? 'Nothing leaves the store now. The items are reserved for your event dates, and you are warned if they clash with other bookings.'
+    : 'The items are recorded as moved out under your name right now.';
+  el('booking-dates').hidden = !booking;
+  el('booking-start').required = booking;
+  el('booking-end').required = booking;
+  el('booking-start').min = todayStr();
+  el('booking-end').min = el('booking-start').value || todayStr();
+  el('checkout-purpose-label').textContent = booking ? 'Event' : 'Purpose / event';
+  if (!booking) el('booking-clashes').hidden = true;
+
+  const fromBooking = !booking && cartBookingId ? allBookings.find((b) => b.id === cartBookingId) : null;
+  const bookingNote = el('cart-booking-note');
+  bookingNote.hidden = !fromBooking;
+  bookingNote.innerHTML = fromBooking
+    ? `${icon('calendar')}<span>Moving out the booking <strong>“${escapeHtml(fromBooking.event)}”</strong> (${escapeHtml(fmtRange(fromBooking.startDate, fromBooking.endDate))}). ` +
+      `It will be marked as collected. Change the quantities if you need fewer or more. ` +
+      `<button type="button" class="link-btn" id="cart-unlink-booking">Not this booking</button></span>`
+    : '';
+
+  el('checkout-submit-btn').innerHTML = booking
+    ? `${icon('calendar')} ${clashAckKey ? 'Book anyway' : `Book ${plural(cart.length, 'item', 'items')}`}`
+    : `${icon('check')} Checkout ${plural(cart.length, 'item', 'items')}`;
 }
+
+function resetClashWarning() {
+  if (!clashAckKey && el('booking-clashes').hidden) return;
+  clashAckKey = null;
+  el('booking-clashes').hidden = true;
+  el('booking-clashes').innerHTML = '';
+  if (!el('cart-modal').hidden) renderCart();
+}
+
+function setCartMode(mode) {
+  if (cartMode === mode) return;
+  cartMode = mode;
+  clashAckKey = null;
+  el('booking-clashes').hidden = true;
+  setFormError('checkout-form-error', '');
+  renderCart();
+  renderGrid();
+}
+
+el('cart-mode-now').addEventListener('click', () => setCartMode('now'));
+el('cart-mode-book').addEventListener('click', () => setCartMode('book'));
+el('checkout-form').addEventListener('input', (e) => {
+  if (e.target.id === 'booking-start' && el('booking-end').value && el('booking-end').value < e.target.value) el('booking-end').value = e.target.value;
+  if (e.target.id === 'booking-start') el('booking-end').min = e.target.value || todayStr();
+  if (cartMode === 'book') resetClashWarning();
+});
+el('cart-booking-note').addEventListener('click', (e) => {
+  if (!e.target.closest('#cart-unlink-booking')) return;
+  cartBookingId = null;
+  saveCart();
+  renderCart();
+});
 
 el('cart-lines').addEventListener('change', (e) => {
   const row = e.target.closest('.cart-line');
@@ -1927,17 +2020,19 @@ el('cart-lines').addEventListener('change', (e) => {
   const item = items.find((i) => i.id === row.dataset.itemId);
   if (!line || !item) return;
 
-  const available = availableQty(item);
+  const available = cartLineMax(item);
   let next = Math.round(Number(e.target.value));
   if (!next || next < 1) next = 1;
   if (available > 0 && next > available) next = available;
   line.quantity = next;
   e.target.value = String(next);
-  const warning = cartLineWarning(line, available);
-  const warningEl = row.querySelector('.line-warning');
-  warningEl.textContent = warning;
-  warningEl.hidden = !warning;
   cartChanged();
+  // Redraw so warnings and booking heads-ups follow the new quantity.
+  clashAckKey = null;
+  el('booking-clashes').hidden = true;
+  renderCart();
+  const again = el('cart-lines').querySelector(`.cart-line[data-item-id="${CSS.escape(line.itemId)}"] input[type="number"]`);
+  if (again && document.activeElement === document.body) again.focus({ preventScroll: true });
 });
 
 el('cart-lines').addEventListener('click', (e) => {
@@ -1946,6 +2041,8 @@ el('cart-lines').addEventListener('click', (e) => {
   const row = removeBtn.closest('.cart-line');
   cart = cart.filter((l) => l.itemId !== row.dataset.itemId);
   cartChanged();
+  clashAckKey = null;
+  el('booking-clashes').hidden = true;
   renderCart();
   focusInside(el('cart-modal'));
 });
@@ -1958,6 +2055,10 @@ function openCart() {
   setFormError('checkout-form-error', '');
   renderCart();
   openModal('cart-modal');
+  // Fresh bookings for the heads-up notes on each line.
+  loadBookings().then((ok) => {
+    if (ok && !el('cart-modal').hidden) renderCart();
+  });
 }
 
 el('cart-btn').addEventListener('click', openCart);
@@ -1975,6 +2076,9 @@ el('cart-clear-btn').addEventListener('click', async () => {
 });
 
 function showCheckoutSuccess(summary, body, loanCount) {
+  el('success-title').textContent = 'Checkout recorded';
+  el('success-loans-btn').textContent = 'View Loan Records';
+  el('success-loans-btn').dataset.tab = 'open';
   el('success-subtitle').textContent = `Recorded under ${body.name.trim()} (${body.employeeNo.trim()}) for “${body.purpose.trim()}”.`;
   el('success-lines').innerHTML = summary
     .map(
@@ -1994,7 +2098,84 @@ function showCheckoutSuccess(summary, body, loanCount) {
   openModal('success-modal');
 }
 
-el('success-loans-btn').addEventListener('click', () => openLoansPanel());
+el('success-loans-btn').addEventListener('click', (e) => openLoansPanel(e.currentTarget.dataset.tab || 'open'));
+
+function showBookingSuccess(booking) {
+  el('success-title').textContent = 'Booking saved';
+  el('success-subtitle').textContent =
+    `For “${booking.event}”, ${fmtRange(booking.startDate, booking.endDate)}. Booked under ${booking.name}${booking.employeeNo ? ` (${booking.employeeNo})` : ''}.`;
+  el('success-lines').innerHTML = booking.lines
+    .map((line) => {
+      const item = items.find((i) => i.id === line.itemId) || {};
+      return `<li><span>${escapeHtml(line.itemName)}</span><strong>${line.quantity} ${escapeHtml(item.unit || 'pcs')}</strong></li>`;
+    })
+    .join('');
+  const note = el('success-loan-note');
+  note.hidden = false;
+  note.innerHTML =
+    `${icon('calendar')}<span>Nothing has left the store yet. On the day, open <strong>Loans &amp; Bookings → Event Bookings</strong> and press <strong>Move out</strong>.` +
+    (booking.clashesAccepted ? ' This booking was made even though some items clash with other bookings — please agree with the other event first.' : '') +
+    `</span>`;
+  el('success-loans-btn').textContent = 'View Bookings';
+  el('success-loans-btn').dataset.tab = 'bookings';
+  el('success-loans-btn').hidden = false;
+  openModal('success-modal');
+}
+
+function showClashes(clashes) {
+  const box = el('booking-clashes');
+  box.innerHTML =
+    `<p class="clash-title">${icon('alert')}<strong>Not enough for those dates</strong></p><ul>` +
+    clashes
+      .map((c) => {
+        const why = c.conflicts.map((b) => `${b.quantity} booked for “${b.event}” (${fmtRange(b.startDate, b.endDate)}, ${b.name})`);
+        if (c.out) why.push(`${c.out} out on loan and not due back before then`);
+        return `<li><strong>${escapeHtml(c.itemName)}</strong>: you asked for ${c.wanted}, ${c.available} free${why.length ? ` — ${escapeHtml(why.join('; '))}` : ''}.</li>`;
+      })
+      .join('') +
+    `</ul><p>Lower the quantity or pick other dates. If you have already agreed with the other event, press <strong>Book anyway</strong>.</p>`;
+  box.hidden = false;
+  box.scrollIntoView({ block: 'nearest' });
+}
+
+async function submitBooking() {
+  const start = el('booking-start').value;
+  const body = {
+    ...personFrom('checkout-name', 'checkout-employee-no'),
+    event: el('checkout-purpose').value,
+    startDate: start,
+    endDate: el('booking-end').value || start,
+    lines: cart.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
+  };
+  if (!start) {
+    setFormError('checkout-form-error', 'Pick the date the items are needed from.');
+    return;
+  }
+  const key = JSON.stringify(body);
+  const res = await request(API.bookings, { method: 'POST', body: { ...body, acceptClashes: clashAckKey === key } });
+  if (!res.ok) {
+    if (res.status === 409 && res.data.code === 'clash') {
+      clashAckKey = key;
+      showClashes(res.data.clashes || []);
+      renderCart();
+      return;
+    }
+    setFormError('checkout-form-error', res.status === 0 ? 'Could not reach the store server — nothing was booked. Please try again.' : res.error);
+    return;
+  }
+  rememberPerson(body);
+  cart = [];
+  cartMode = 'now';
+  clashAckKey = null;
+  saveCart();
+  el('checkout-purpose').value = '';
+  el('booking-start').value = '';
+  el('booking-end').value = '';
+  el('booking-clashes').hidden = true;
+  renderGrid();
+  showBookingSuccess(res.data.booking);
+  await loadBookings();
+}
 
 el('checkout-form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -2002,6 +2183,10 @@ el('checkout-form').addEventListener('submit', (e) => {
 
   withBusy(el('checkout-submit-btn'), async () => {
     setFormError('checkout-form-error', '');
+    if (cartMode === 'book') {
+      await submitBooking();
+      return;
+    }
     const hasLoanable = cartLoanableItems().length > 0;
     const body = {
       ...personFrom('checkout-name', 'checkout-employee-no'),
@@ -2009,6 +2194,7 @@ el('checkout-form').addEventListener('submit', (e) => {
       expectedReturnDate: hasLoanable ? el('checkout-return-date').value || null : null,
       lines: cart.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
     };
+    if (cartBookingId) body.bookingId = cartBookingId;
 
     const res = await request(API.checkout, { method: 'POST', body });
     if (!res.ok) {
@@ -2039,6 +2225,10 @@ el('checkout-form').addEventListener('submit', (e) => {
       { ...body, name: recorded.name || body.name, employeeNo: recorded.employeeNo || body.employeeNo },
       (res.data.loans || []).length
     );
+    if (res.data.booking) {
+      el('success-subtitle').textContent += ` Booking “${res.data.booking.event}” is now marked as collected.`;
+      loadBookings();
+    }
     renderGrid();
     await loadItems({ silent: true });
     loadReportsBadge();
@@ -2173,12 +2363,18 @@ let loansTab = 'open';
 let loansSearch = '';
 const selectedLoanIds = new Set();
 
-async function openLoansPanel() {
+async function openLoansPanel(tab) {
+  if (tab === 'open' || tab === 'all' || tab === 'bookings') loansTab = tab;
   selectedLoanIds.clear();
   renderLoansPanel();
   openModal('loans-modal');
 
-  const res = await request(API.loans);
+  const [res] = await Promise.all([
+    request(API.loans),
+    loadBookings().then((ok) => {
+      if (ok && loansTab === 'bookings') renderLoansPanel();
+    }),
+  ]);
   if (!res.ok) {
     if (loansLoaded) showToast(`Could not refresh the loan records. ${res.error}`, 'error');
     else {
@@ -2229,11 +2425,22 @@ function syncSelectAll(list) {
 
 function renderLoansPanel() {
   const openTab = loansTab === 'open';
+  const bookingTab = loansTab === 'bookings';
+  const allTab = !openTab && !bookingTab;
   el('loans-tab-open').classList.toggle('active', openTab);
   el('loans-tab-open').setAttribute('aria-pressed', String(openTab));
-  el('loans-tab-all').classList.toggle('active', !openTab);
-  el('loans-tab-all').setAttribute('aria-pressed', String(!openTab));
+  el('loans-tab-all').classList.toggle('active', allTab);
+  el('loans-tab-all').setAttribute('aria-pressed', String(allTab));
+  el('loans-tab-bookings').classList.toggle('active', bookingTab);
+  el('loans-tab-bookings').setAttribute('aria-pressed', String(bookingTab));
   el('loans-return-selected-btn').hidden = !openTab;
+  el('loans-export-btn').hidden = bookingTab;
+  el('new-booking-btn').hidden = !bookingTab;
+  el('loans-search').placeholder = bookingTab ? 'Search event, item or person…' : 'Search item, borrower or event…';
+  if (bookingTab) {
+    renderBookingsTable();
+    return;
+  }
 
   el('loans-head').innerHTML = openTab
     ? '<tr><th><input type="checkbox" id="loans-select-all" aria-label="Select every loan shown" /></th><th>Item</th><th>Not returned</th><th>Borrowed by</th><th>Purpose / event</th><th>Moved out</th><th>Due back</th><th><span class="sr-only">Return</span></th></tr>'
@@ -2316,6 +2523,16 @@ function renderLoansPanel() {
 el('loans-btn').addEventListener('click', openLoansPanel);
 
 el('loans-body').addEventListener('click', (e) => {
+  const bookingBtn = e.target.closest('[data-booking-collect], [data-booking-cancel], [data-booking-delete]');
+  if (bookingBtn) {
+    const id = bookingBtn.dataset.bookingCollect || bookingBtn.dataset.bookingCancel || bookingBtn.dataset.bookingDelete;
+    const booking = allBookings.find((b) => b.id === id);
+    if (!booking) return;
+    if (bookingBtn.dataset.bookingCollect) collectBooking(booking);
+    else if (bookingBtn.dataset.bookingCancel) cancelBooking(booking, bookingBtn);
+    else requireAdminThen(() => deleteBooking(booking));
+    return;
+  }
   const btn = e.target.closest('[data-loan-edit], [data-loan-delete]');
   if (!btn) return;
   const loan = allLoans.find((l) => l.id === (btn.dataset.loanEdit || btn.dataset.loanDelete));
@@ -2415,6 +2632,220 @@ el('loans-tab-open').addEventListener('click', () => {
 el('loans-tab-all').addEventListener('click', () => {
   loansTab = 'all';
   renderLoansPanel();
+});
+
+el('loans-tab-bookings').addEventListener('click', () => {
+  loansTab = 'bookings';
+  renderLoansPanel();
+});
+
+// ---------- Event bookings ----------
+
+let allBookings = [];
+let bookingsLoaded = false;
+
+async function loadBookings() {
+  const res = await request(API.bookings);
+  if (!res.ok) return false;
+  allBookings = Array.isArray(res.data.bookings) ? res.data.bookings : [];
+  bookingsLoaded = true;
+  return true;
+}
+
+// "14 Dec 2026" or "14 Dec 2026 – 15 Dec 2026"
+function fmtRange(start, end) {
+  return !end || end === start ? fmtDate(start) : `${fmtDate(start)} – ${fmtDate(end)}`;
+}
+
+// Booked, and the event has not finished yet.
+function isLiveBooking(b) {
+  return b.status === 'booked' && b.endDate >= todayStr();
+}
+
+function bookingQty(b, itemId) {
+  return (b.lines || []).filter((l) => l.itemId === itemId).reduce((sum, l) => sum + l.quantity, 0);
+}
+
+function liveBookingsFor(itemId, { except } = {}) {
+  return allBookings
+    .filter((b) => b.id !== except && isLiveBooking(b) && bookingQty(b, itemId) > 0)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+}
+
+// Taking items out now while some are booked for an event: a gentle note.
+function bookingHeadsUp(item, quantity) {
+  const list = liveBookingsFor(item.id, { except: cartBookingId });
+  if (list.length === 0) return '';
+  const booked = list.reduce((sum, b) => sum + bookingQty(b, item.id), 0);
+  if (availableQty(item) - quantity >= booked) return '';
+  const first = list[0];
+  return list.length === 1
+    ? `${booked} booked for “${first.event}” from ${fmtDate(first.startDate)} — check with ${first.name} before taking these.`
+    : `${booked} booked for ${list.length} upcoming events (first: “${first.event}”, ${fmtDate(first.startDate)}) — check before taking these.`;
+}
+
+function renderDetailBookings(item) {
+  const box = el('detail-bookings');
+  const list = liveBookingsFor(item.id);
+  box.hidden = list.length === 0;
+  if (list.length === 0) {
+    box.innerHTML = '';
+    return;
+  }
+  const shown = list.slice(0, 5);
+  box.innerHTML =
+    `<p class="detail-bookings-title">${icon('calendar')}<strong>Booked for upcoming events</strong></p><ul>` +
+    shown
+      .map(
+        (b) =>
+          `<li><strong>${bookingQty(b, item.id)} ${escapeHtml(item.unit || 'pcs')}</strong> for “${escapeHtml(b.event)}” · ` +
+          `${escapeHtml(fmtRange(b.startDate, b.endDate))} · ${escapeHtml(b.name)}</li>`
+      )
+      .join('') +
+    `</ul>` +
+    (list.length > shown.length ? `<p class="muted-text">+ ${list.length - shown.length} more in Loans &amp; Bookings → Event Bookings</p>` : '');
+}
+
+function bookingStatusHtml(b) {
+  const today = todayStr();
+  if (b.status === 'cancelled') return '<span class="qty-pill muted-pill">Cancelled</span>';
+  if (b.status === 'collected') return `<span class="qty-pill ok">Collected</span> ${escapeHtml(fmtDay(b.collectedAt))}`;
+  if (b.endDate < today) return '<span class="qty-pill low">Not collected</span>';
+  const clash = b.clashesAccepted ? ' <span class="qty-pill low" title="Booked even though some items clash with other bookings">Clash</span>' : '';
+  if (b.startDate <= today) return `<span class="qty-pill booking-now">On now</span>${clash}`;
+  return `<span class="qty-pill booking-soon">Upcoming</span>${clash}`;
+}
+
+function ownsBooking(b) {
+  return Boolean(session && b.email && session.user.email === b.email);
+}
+
+// Upcoming and current first (soonest first), then the rest (newest first).
+function sortedBookings() {
+  const live = allBookings.filter(isLiveBooking).sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const rest = allBookings.filter((b) => !isLiveBooking(b)).sort((a, b) => b.startDate.localeCompare(a.startDate));
+  return live.concat(rest);
+}
+
+function renderBookingsTable() {
+  const admin = isAdminUnlocked();
+  el('loans-head').innerHTML =
+    '<tr><th>Event</th><th>Dates</th><th>Items</th><th>Booked by</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr>';
+  const term = loansSearch.trim().toLowerCase();
+  const list = sortedBookings().filter(
+    (b) =>
+      !term ||
+      [b.event, b.name, b.employeeNo, b.notes, ...(b.lines || []).map((l) => l.itemName)].some((v) => String(v || '').toLowerCase().includes(term))
+  );
+  const empty = el('loans-empty');
+  empty.hidden = list.length > 0;
+  if (!bookingsLoaded) empty.textContent = 'Loading bookings…';
+  else if (term) empty.textContent = 'No bookings match your search.';
+  else empty.textContent = 'No event bookings yet. Put the items in your cart, then choose “Book for an event”.';
+
+  el('loans-body').innerHTML = list
+    .map((b) => {
+      const live = isLiveBooking(b);
+      const actions = [];
+      if (live) {
+        actions.push(`<button type="button" class="ghost-btn sky-btn" data-booking-collect="${escapeHtml(b.id)}">${icon('cart')} Move out</button>`);
+        if (ownsBooking(b) || admin) {
+          actions.push(`<button type="button" class="ghost-btn" data-booking-cancel="${escapeHtml(b.id)}">Cancel</button>`);
+        }
+      }
+      if (admin) {
+        actions.push(
+          `<button type="button" class="icon-btn danger-text" data-booking-delete="${escapeHtml(b.id)}" aria-label="Delete this booking record" title="Delete this booking record">${icon('trash')}</button>`
+        );
+      }
+      const linesText = (b.lines || []).map((l) => `${l.itemName} × ${l.quantity}`).join(', ');
+      return (
+        `<tr${live ? '' : ' class="is-past"'}>` +
+        `<td><strong>${escapeHtml(b.event)}</strong>${b.notes ? `<div class="muted-text">${escapeHtml(b.notes)}</div>` : ''}</td>` +
+        `<td class="nowrap">${escapeHtml(fmtRange(b.startDate, b.endDate))}</td>` +
+        `<td>${escapeHtml(linesText)}</td>` +
+        `<td>${escapeHtml(b.name)}${b.employeeNo ? ` (${escapeHtml(b.employeeNo)})` : ''}</td>` +
+        `<td>${bookingStatusHtml(b)}</td>` +
+        `<td class="row-actions">${actions.join('')}</td>` +
+        `</tr>`
+      );
+    })
+    .join('');
+}
+
+// "Move out" on a booking: fills the cart with its items, event and return date.
+async function collectBooking(b) {
+  const lines = (b.lines || []).filter((l) => items.some((i) => i.id === l.itemId)).map((l) => ({ itemId: l.itemId, quantity: l.quantity }));
+  if (lines.length === 0) {
+    showToast('The items in this booking are no longer in the store.', 'error');
+    return;
+  }
+  if (cart.length > 0 && cartBookingId !== b.id) {
+    const ok = await confirmDialog({
+      title: 'Replace what is in your cart?',
+      message: `Your cart has ${plural(cart.length, 'item', 'items')}. Moving out “${b.event}” puts this booking's items in the cart instead.`,
+      confirmLabel: 'Use this booking',
+      danger: false,
+    });
+    if (!ok) return;
+  }
+  cart = lines;
+  cartBookingId = b.id;
+  cartMode = 'now';
+  clashAckKey = null;
+  saveCart();
+  renderGrid();
+  el('checkout-purpose').value = b.event;
+  el('checkout-return-date').value = b.endDate >= todayStr() ? b.endDate : '';
+  closeModal('loans-modal');
+  openCart();
+}
+
+async function cancelBooking(b, button) {
+  const ok = await confirmDialog({
+    title: 'Cancel this booking?',
+    message: `“${b.event}” (${fmtRange(b.startDate, b.endDate)}), booked by ${b.name}. The items will be free for other events again.`,
+    confirmLabel: 'Cancel booking',
+  });
+  if (!ok) return;
+  await withBusy(button, async () => {
+    const res = await request(`${API.bookings}?id=${encodeURIComponent(b.id)}`, { method: 'PATCH', body: { status: 'cancelled' } });
+    if (!res.ok) {
+      showToast(res.error, 'error');
+      return;
+    }
+    showToast('Booking cancelled.', 'success');
+    await loadBookings();
+    renderLoansPanel();
+  });
+}
+
+async function deleteBooking(b) {
+  const ok = await confirmDialog({
+    title: 'Delete this booking record?',
+    message: `“${b.event}” (${fmtRange(b.startDate, b.endDate)}), booked by ${b.name}. This removes the record for good — to just call it off, use Cancel.`,
+    confirmLabel: 'Delete record',
+  });
+  if (!ok) return;
+  const res = await request(`${API.bookings}?id=${encodeURIComponent(b.id)}`, { method: 'DELETE', admin: true });
+  if (!res.ok) {
+    showToast(res.error, 'error');
+    return;
+  }
+  showToast('Booking record deleted.', 'success');
+  await loadBookings();
+  renderLoansPanel();
+}
+
+el('new-booking-btn').addEventListener('click', () => {
+  closeModal('loans-modal');
+  cartMode = 'book';
+  if (cart.length === 0) {
+    renderGrid();
+    showToast('Add the items for your event to the cart, then open the cart to book them.', '', 6000);
+    return;
+  }
+  openCart();
 });
 
 el('loans-search').addEventListener('input', (e) => {
@@ -3070,6 +3501,7 @@ function cleanupBody() {
     activity: el('cleanup-activity').checked,
     loans: el('cleanup-loans').checked,
     reports: el('cleanup-reports').checked,
+    bookings: el('cleanup-bookings').checked,
   };
 }
 
@@ -3085,7 +3517,7 @@ function openCleanupModal() {
   d.setMonth(d.getMonth() - 6);
   el('cleanup-before').value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   el('cleanup-before').max = todayStr();
-  ['cleanup-activity', 'cleanup-loans', 'cleanup-reports'].forEach((id) => (el(id).checked = true));
+  ['cleanup-activity', 'cleanup-loans', 'cleanup-reports', 'cleanup-bookings'].forEach((id) => (el(id).checked = true));
   resetCleanupPreview();
   openModal('cleanup-modal');
 }
@@ -3106,7 +3538,7 @@ el('cleanup-form').addEventListener('submit', (e) => {
         return;
       }
       const n = res.data.removed;
-      const total = n.activity + n.loans + n.reports;
+      const total = n.activity + n.loans + n.reports + (n.bookings || 0);
       const preview = el('cleanup-preview');
       preview.hidden = false;
       if (total === 0) {
@@ -3117,6 +3549,7 @@ el('cleanup-form').addEventListener('submit', (e) => {
       if (body.activity) parts.push(plural(n.activity, 'activity record', 'activity records'));
       if (body.loans) parts.push(plural(n.loans, 'returned loan', 'returned loans'));
       if (body.reports) parts.push(plural(n.reports, 'resolved report', 'resolved reports'));
+      if (body.bookings) parts.push(plural(n.bookings || 0, 'past booking', 'past bookings'));
       preview.textContent = `From before ${fmtDate(body.before)}: ${parts.join(', ')}. Stock quantities stay as they are.`;
       cleanupChecked = key;
       el('cleanup-submit-btn').textContent = `Clear ${plural(total, 'record', 'records')}`;
@@ -3135,7 +3568,8 @@ el('cleanup-form').addEventListener('submit', (e) => {
     }
     const n = res.data.removed;
     closeModal('cleanup-modal');
-    showToast(`Cleared ${plural(n.activity + n.loans + n.reports, 'record', 'records')}.`, 'success');
+    showToast(`Cleared ${plural(n.activity + n.loans + n.reports + (n.bookings || 0), 'record', 'records')}.`, 'success');
+    loadBookings();
     loadReportsBadge();
   });
 });
@@ -3731,6 +4165,7 @@ setBadge('cart-badge', cart.length);
 
 loadItems();
 loadReportsBadge();
+loadBookings();
 checkSession();
 
 // Google's script loads on its own schedule: start now if it is already here,

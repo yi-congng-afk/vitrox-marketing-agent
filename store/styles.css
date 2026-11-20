@@ -1648,3 +1648,42 @@ button.low-stock-row:hover { background: var(--accent-soft); }
   body.printing-labels #print-area { display: block; }
   body.printing-labels .qr-label { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* ---------- Event bookings ---------- */
+
+.cart-mode { margin: 0.25rem 0 0.35rem; }
+.cart-mode .chip { display: inline-flex; align-items: center; gap: 0.35rem; }
+.cart-mode-hint { font-size: 0.82rem; margin: 0 0 0.75rem; }
+.clash-box {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.8rem;
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.875rem;
+}
+.clash-box p { margin: 0.2rem 0; }
+.clash-box ul { margin: 0.35rem 0; padding-left: 1.1rem; }
+.clash-box li + li { margin-top: 0.25rem; }
+.clash-title { display: flex; align-items: center; gap: 0.4rem; }
+.line-booked { display: flex; gap: 0.35rem; align-items: flex-start; margin-top: 0.25rem; font-size: 0.8rem; color: var(--warn); }
+.line-booked .icon { flex: none; margin-top: 0.1rem; }
+.detail-bookings {
+  background: var(--sky-soft);
+  border: 1px solid var(--sky-border);
+  color: var(--sky-text);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  margin: 0.5rem 0;
+  font-size: 0.875rem;
+}
+.detail-bookings ul { margin: 0.3rem 0 0; padding-left: 1.1rem; }
+.detail-bookings-title { display: flex; align-items: center; gap: 0.4rem; margin: 0; }
+.qty-pill.booking-soon { background: var(--sky); color: var(--sky-text); }
+.qty-pill.booking-now { background: var(--warn-bg); color: var(--warn); }
+.loans-table tr.is-past td { color: var(--text-muted); }
+.loans-table .row-actions .ghost-btn { min-height: 34px; padding: 0.3rem 0.65rem; }
+.tab-row .chip .icon { width: 15px; height: 15px; }
+.qty-pill.muted-pill { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+.tab-row { flex-wrap: wrap; }

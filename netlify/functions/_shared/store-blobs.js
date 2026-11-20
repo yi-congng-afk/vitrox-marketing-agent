@@ -278,6 +278,19 @@ async function saveLoans(loans) {
   await loansStore().setJSON('loans', loans);
 }
 
+function bookingsStore() {
+  return getStore(storeConfig('vitrox-store-bookings'));
+}
+
+async function getBookings() {
+  const data = await bookingsStore().get('bookings', { type: 'json' });
+  return Array.isArray(data) ? data : [];
+}
+
+async function saveBookings(bookings) {
+  await bookingsStore().setJSON('bookings', bookings);
+}
+
 function genId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -292,6 +305,8 @@ module.exports = {
   saveReports,
   getLoans,
   saveLoans,
+  getBookings,
+  saveBookings,
   genId,
   getConfig,
   saveConfig,

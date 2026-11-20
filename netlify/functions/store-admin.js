@@ -12,6 +12,8 @@ const {
   saveLoans,
   getReports,
   saveReports,
+  getBookings,
+  saveBookings,
 } = require('./_shared/store-blobs');
 
 function json(statusCode, payload, extraHeaders) {
@@ -66,15 +68,24 @@ exports.handler = async (event) => {
   }
 
   if (event.httpMethod === 'GET' && action === 'backup') {
-    const [items, categories, transactions, loans, reports] = await Promise.all([
+    const [items, categories, transactions, loans, reports, bookings] = await Promise.all([
       getItems(),
       getCategories(),
       getTransactions(),
       getLoans(),
       getReports(),
+      getBookings(),
     ]);
-    await audit(event, 'backup', `Downloaded a backup (${items.length} items, ${transactions.length} activity, ${loans.length} loans, ${reports.length} reports)`);
-    return json(200, { exportedAt: new Date().toISOString(), version: 1, categories, items, transactions, loans, reports }, { 'Cache-Control': 'no-store' });
+    await audit(
+      event,
+      'backup',
+      `Downloaded a backup (${items.length} items, ${transactions.length} activity, ${loans.length} loans, ${reports.length} reports, ${bookings.length} bookings)`
+    );
+    return json(
+      200,
+      { exportedAt: new Date().toISOString(), version: 1, categories, items, transactions, loans, reports, bookings },
+      { 'Cache-Control': 'no-store' }
+    );
   }
 
   if (event.httpMethod === 'POST' && action === 'cleanup') {
@@ -86,7 +97,7 @@ exports.handler = async (event) => {
     }
     const before = String(body.before || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(before)) return json(400, { error: 'Pick the date to clear history before' });
-    if (!body.activity && !body.loans && !body.reports) return json(400, { error: 'Tick at least one kind of history to clear' });
+    if (!body.activity && !body.loans && !body.reports && !body.bookings) return json(400, { error: 'Tick at least one kind of history to clear' });
     // Dates are compared in Malaysia time (UTC+8): "before 1 Jan" means before 1 Jan 00:00 MYT.
     const cutoff = Date.parse(`${before}T00:00:00+08:00`);
     const older = (iso) => {
@@ -94,25 +105,28 @@ exports.handler = async (event) => {
       return Number.isFinite(t) && t < cutoff;
     };
 
-    const [transactions, loans, reports] = await Promise.all([getTransactions(), getLoans(), getReports()]);
+    const [transactions, loans, reports, bookings] = await Promise.all([getTransactions(), getLoans(), getReports(), getBookings()]);
     const dropTxns = body.activity ? transactions.filter((t) => older(t.timestamp)) : [];
     // Only loans that are fully returned — anything still out stays.
     const dropLoans = body.loans ? loans.filter((l) => l.status === 'returned' && older(l.loanedAt)) : [];
     // Only resolved reports — open ones stay.
     const dropReports = body.reports ? reports.filter((r) => r.status === 'resolved' && older(r.createdAt)) : [];
-    const counts = { activity: dropTxns.length, loans: dropLoans.length, reports: dropReports.length };
+    // Only bookings whose event ended before the date (collected, cancelled or never collected).
+    const dropBookings = body.bookings ? bookings.filter((b) => typeof b.endDate === 'string' && b.endDate < before) : [];
+    const counts = { activity: dropTxns.length, loans: dropLoans.length, reports: dropReports.length, bookings: dropBookings.length };
 
     if (!body.dryRun) {
       await Promise.all([
         dropTxns.length ? saveTransactions(transactions.filter((t) => !dropTxns.includes(t))) : null,
         dropLoans.length ? saveLoans(loans.filter((l) => !dropLoans.includes(l))) : null,
         dropReports.length ? saveReports(reports.filter((r) => !dropReports.includes(r))) : null,
+        dropBookings.length ? saveBookings(bookings.filter((b) => !dropBookings.includes(b))) : null,
       ]);
-      if (counts.activity || counts.loans || counts.reports) {
+      if (counts.activity || counts.loans || counts.reports || counts.bookings) {
         await audit(
           event,
           'cleanup',
-          `Cleared history from before ${before}: ${counts.activity} activity, ${counts.loans} returned loans, ${counts.reports} resolved reports`
+          `Cleared history from before ${before}: ${counts.activity} activity, ${counts.loans} returned loans, ${counts.reports} resolved reports, ${counts.bookings} past bookings`
         );
       }
     }
