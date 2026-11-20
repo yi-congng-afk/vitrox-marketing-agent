@@ -2,6 +2,9 @@ const { requireAdmin } = require('./_shared/store-auth');
 const { getItems, getReports, saveReports, genId } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
+const { audit } = require('./_shared/audit');
+
+const reportLabel = (r) => `${r.type === 'damage' ? 'damage report' : 'restock request'} for "${r.itemName}" by ${r.name}`;
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
@@ -75,7 +78,7 @@ exports.handler = async (event) => {
   }
 
   if (method === 'PATCH') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;
@@ -92,6 +95,7 @@ exports.handler = async (event) => {
     const index = reports.findIndex((r) => r.id === id);
     if (index === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Report not found' }) };
 
+    const wasStatus = reports[index].status;
     if (body.status === 'resolved') {
       reports[index].status = 'resolved';
       reports[index].resolvedAt = new Date().toISOString();
@@ -100,12 +104,16 @@ exports.handler = async (event) => {
       reports[index].resolvedAt = null;
     }
     await saveReports(reports);
+    if (reports[index].status !== wasStatus) {
+      const resolved = reports[index].status === 'resolved';
+      await audit(event, resolved ? 'report.resolve' : 'report.reopen', `${resolved ? 'Resolved' : 'Reopened'} ${reportLabel(reports[index])}`);
+    }
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report: reports[index] }) };
   }
 
   if (method === 'DELETE') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;
@@ -116,6 +124,7 @@ exports.handler = async (event) => {
     if (index === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Report not found' }) };
     const [removed] = reports.splice(index, 1);
     await saveReports(reports);
+    await audit(event, 'report.delete', `Deleted ${removed.status} ${reportLabel(removed)}: ${removed.message}`);
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ report: removed }) };
   }
 

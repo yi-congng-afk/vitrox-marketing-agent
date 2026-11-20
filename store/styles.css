@@ -1540,3 +1540,16 @@ button.low-stock-row:hover { background: var(--accent-soft); }
 
 .cleanup-kinds { border: none; padding: 0; margin: 0.25rem 0 0.75rem; display: grid; gap: 0.4rem; }
 .cleanup-kinds legend { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }
+
+/* ---------- Admin: activity log, admins ---------- */
+
+.audit-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+.audit-tools label { margin: 0; }
+.audit-tools .audit-search { flex: 1 1 12rem; }
+.audit-list { display: grid; gap: 0.5rem; }
+.audit-row { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; background: var(--surface); }
+.audit-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.15rem 0.75rem; font-size: 0.85rem; }
+.audit-meta span { color: var(--text-muted); }
+.audit-row p { margin: 0.25rem 0 0; font-size: 0.9rem; overflow-wrap: anywhere; }
+.admin-email { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 0.35rem 0; }
+.admin-email .category-count { min-width: 0; margin-left: 0.35rem; }

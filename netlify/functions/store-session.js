@@ -13,10 +13,20 @@ const {
   writeProfile,
   validEmployeeNo,
   verifyGoogleCredential,
+  isAdminEmail,
 } = require('./_shared/store-access');
+const { audit } = require('./_shared/audit');
 
-function publicUser(user) {
-  return { email: user.email, name: user.name, employeeNo: user.employeeNo || '', expiresAt: user.exp };
+// isAdmin only decides which buttons the page shows; every admin action is
+// checked again on the server.
+async function publicUser(user) {
+  let isAdmin = false;
+  try {
+    isAdmin = await isAdminEmail(user.email);
+  } catch {
+    // Admin tools stay hidden; the admin password still works.
+  }
+  return { email: user.email, name: user.name, employeeNo: user.employeeNo || '', expiresAt: user.exp, isAdmin };
 }
 
 function parseBody(event) {
@@ -52,7 +62,7 @@ exports.handler = async (event) => {
 
     return json(200, {
       requireSignIn: config.requireSignIn,
-      user: user ? publicUser(user) : null,
+      user: user ? await publicUser(user) : null,
       expired: Boolean(sessionToken(event)) && !user,
       token,
     });
@@ -93,7 +103,7 @@ exports.handler = async (event) => {
 
     return json(200, {
       token: issueToken(user, user.exp, config.sessionSecret),
-      user: publicUser(user),
+      user: await publicUser(user),
       requireSignIn: config.requireSignIn,
     });
   }
@@ -119,11 +129,11 @@ exports.handler = async (event) => {
 
     const updated = { ...user, employeeNo };
     const config = await loadConfig();
-    return json(200, { token: issueToken(updated, updated.exp, config.sessionSecret), user: publicUser(updated) });
+    return json(200, { token: issueToken(updated, updated.exp, config.sessionSecret), user: await publicUser(updated) });
   }
 
   if (method === 'PATCH') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
 
     const body = parseBody(event);
@@ -139,7 +149,11 @@ exports.handler = async (event) => {
       });
     }
 
+    const before = (await loadConfig({ fresh: true })).requireSignIn;
     const config = await setRequireSignIn(body.requireSignIn);
+    if (before !== config.requireSignIn) {
+      await audit(event, 'signin.setting', config.requireSignIn ? 'Made ViTrox sign-in required for everyone' : 'Made sign-in optional');
+    }
     return json(200, { requireSignIn: config.requireSignIn });
   }
 

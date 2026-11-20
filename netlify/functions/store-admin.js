@@ -1,6 +1,9 @@
 const { requireAdmin } = require('./_shared/store-auth');
-const { checkAccess } = require('./_shared/store-access');
+const { checkAccess, loadAdmins, saveAdmins } = require('./_shared/store-access');
+const { audit, malaysiaMonth } = require('./_shared/audit');
 const {
+  getAuditMonth,
+  listAuditMonths,
   getItems,
   getCategories,
   getTransactions,
@@ -19,13 +22,48 @@ function json(statusCode, payload, extraHeaders) {
 //   GET  ?action=backup   -> everything (except photo files) as one JSON download
 //   POST ?action=cleanup  -> remove finished history older than a date; stock
 //        { before: 'YYYY-MM-DD', activity, loans, reports, dryRun }  is never changed
+//   GET  ?action=admins   -> { admins, you }
+//   POST ?action=admins   -> { admins: [emails] } replaces the admin list
+//   GET  ?action=log[&month=YYYY-MM] -> admin activity for one month, newest first
 exports.handler = async (event) => {
   const access = await checkAccess(event);
   if (access.response) return access.response;
-  const adminError = requireAdmin(event);
+  const adminError = await requireAdmin(event);
   if (adminError) return adminError;
 
-  const action = (event.queryStringParameters || {}).action;
+  const params = event.queryStringParameters || {};
+  const action = params.action;
+
+  if (event.httpMethod === 'GET' && action === 'admins') {
+    return json(200, { admins: await loadAdmins({ fresh: true }), you: access.user ? access.user.email : null });
+  }
+
+  if (event.httpMethod === 'POST' && action === 'admins') {
+    let body;
+    try {
+      body = JSON.parse(event.body || '{}') || {};
+    } catch {
+      return json(400, { error: 'Invalid request body' });
+    }
+    const before = await loadAdmins({ fresh: true });
+    const result = await saveAdmins(body.admins);
+    if (!result.ok) return json(400, { error: result.error });
+    const added = result.admins.filter((e) => !before.includes(e));
+    const removed = before.filter((e) => !result.admins.includes(e));
+    const parts = [];
+    if (added.length) parts.push(`added ${added.join(', ')}`);
+    if (removed.length) parts.push(`removed ${removed.join(', ')}`);
+    if (parts.length) await audit(event, 'admins', `Admins: ${parts.join('; ')}`);
+    return json(200, { admins: result.admins, you: access.user ? access.user.email : null });
+  }
+
+  if (event.httpMethod === 'GET' && action === 'log') {
+    const month = /^\d{4}-\d{2}$/.test(params.month || '') ? params.month : malaysiaMonth();
+    const [entries, months] = await Promise.all([getAuditMonth(month), listAuditMonths()]);
+    if (!months.includes(month)) months.unshift(month);
+    months.sort().reverse();
+    return json(200, { month, months, entries: entries.slice().reverse() }, { 'Cache-Control': 'no-store' });
+  }
 
   if (event.httpMethod === 'GET' && action === 'backup') {
     const [items, categories, transactions, loans, reports] = await Promise.all([
@@ -35,6 +73,7 @@ exports.handler = async (event) => {
       getLoans(),
       getReports(),
     ]);
+    await audit(event, 'backup', `Downloaded a backup (${items.length} items, ${transactions.length} activity, ${loans.length} loans, ${reports.length} reports)`);
     return json(200, { exportedAt: new Date().toISOString(), version: 1, categories, items, transactions, loans, reports }, { 'Cache-Control': 'no-store' });
   }
 
@@ -69,6 +108,13 @@ exports.handler = async (event) => {
         dropLoans.length ? saveLoans(loans.filter((l) => !dropLoans.includes(l))) : null,
         dropReports.length ? saveReports(reports.filter((r) => !dropReports.includes(r))) : null,
       ]);
+      if (counts.activity || counts.loans || counts.reports) {
+        await audit(
+          event,
+          'cleanup',
+          `Cleared history from before ${before}: ${counts.activity} activity, ${counts.loans} returned loans, ${counts.reports} resolved reports`
+        );
+      }
     }
     return json(200, { dryRun: Boolean(body.dryRun), removed: counts });
   }

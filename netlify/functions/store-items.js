@@ -12,8 +12,21 @@ const {
   migrateInlineImages,
 } = require('./_shared/store-blobs');
 const { checkAccess } = require('./_shared/store-access');
+const { audit, describeChanges } = require('./_shared/audit');
 
 const REQUIRED_FIELDS = ['name', 'category'];
+const ITEM_FIELDS = [
+  ['name', 'name'],
+  ['category', 'category'],
+  ['unit', 'unit'],
+  ['quantity', 'total', 'number'],
+  ['lowStockThreshold', 'low-stock level', 'number'],
+  ['returnable', 'loanable'],
+  ['locationText', 'location'],
+  ['notes', 'notes'],
+  ['itemImage', 'photo', 'photo'],
+  ['locationImage', 'location photo', 'photo'],
+];
 const MAX_CATEGORY_LENGTH = 60;
 
 function json(statusCode, payload) {
@@ -23,7 +36,7 @@ function json(statusCode, payload) {
 // Admin: replace the category list. body = { categories: [names in order],
 // renames: { oldName: newName } }. Items in a renamed category move with it;
 // a category that still has items can't be dropped.
-async function updateCategories(body) {
+async function updateCategories(body, event) {
   const list = [];
   const seen = new Set();
   for (const raw of Array.isArray(body.categories) ? body.categories : []) {
@@ -58,8 +71,23 @@ async function updateCategories(body) {
     });
   }
 
+  const previous = await getCategories();
   if (moved) await saveItems(items);
   await saveCategories(list);
+
+  const renamed = Object.entries(renames)
+    .filter(([from, to]) => typeof to === 'string' && from !== to && previous.includes(from))
+    .map(([from, to]) => `"${from}" → "${to}"`);
+  const renamedTargets = Object.values(renames);
+  const added = list.filter((n) => !previous.includes(n) && !renamedTargets.includes(n));
+  const removed = previous.filter((n) => !list.includes(n) && !(n in renames));
+  const parts = [];
+  if (renamed.length) parts.push(`renamed ${renamed.join(', ')}`);
+  if (added.length) parts.push(`added ${added.map((n) => `"${n}"`).join(', ')}`);
+  if (removed.length) parts.push(`removed ${removed.map((n) => `"${n}"`).join(', ')}`);
+  if (!parts.length && previous.join('\n') !== list.join('\n')) parts.push('changed the order');
+  if (parts.length) await audit(event, 'categories', `Categories: ${parts.join('; ')}`);
+
   return json(200, { categories: list, items, moved });
 }
 
@@ -125,7 +153,7 @@ exports.handler = async (event) => {
     };
   }
 
-  const adminError = requireAdmin(event);
+  const adminError = await requireAdmin(event);
   if (adminError) return adminError;
 
   if (method === 'POST' && event.queryStringParameters && event.queryStringParameters.action === 'categories') {
@@ -135,7 +163,7 @@ exports.handler = async (event) => {
     } catch {
       return json(400, { error: 'Invalid request body' });
     }
-    return updateCategories(body);
+    return updateCategories(body, event);
   }
 
   if (method === 'POST') {
@@ -180,6 +208,7 @@ exports.handler = async (event) => {
 
     items.push(newItem);
     await saveItems(items);
+    await audit(event, 'item.add', `Added item "${newItem.name}" (${newItem.category}, ${newItem.quantity} ${newItem.unit})`);
 
     return { statusCode: 201, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: newItem }) };
   }
@@ -212,9 +241,12 @@ exports.handler = async (event) => {
     } catch (err) {
       return { statusCode: 400, body: JSON.stringify({ error: err.message }) };
     }
+    const before = items[index];
     items[index] = updated;
     await saveItems(items);
     await Promise.all(replacedImages.map(deleteImage));
+    const changes = describeChanges(before, updated, ITEM_FIELDS);
+    if (changes) await audit(event, 'item.edit', `Edited "${before.name}": ${changes}`);
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: updated }) };
   }
@@ -236,6 +268,7 @@ exports.handler = async (event) => {
     const [removed] = items.splice(index, 1);
     await saveItems(items);
     await Promise.all(IMAGE_FIELDS.map((field) => deleteImage(removed[field])));
+    await audit(event, 'item.delete', `Deleted item "${removed.name}" (had ${removed.quantity} ${removed.unit || 'pcs'})`);
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: removed }) };
   }

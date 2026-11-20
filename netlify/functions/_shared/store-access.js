@@ -1,6 +1,5 @@
 const crypto = require('crypto');
-const { isAdmin } = require('./store-auth');
-const { getConfig, saveConfig, getProfile, saveProfile } = require('./store-blobs');
+const { getConfig, saveConfig, getProfile, saveProfile, getAdminList, saveAdminList } = require('./store-blobs');
 
 // "Sign in with Google" for ViTrox staff.
 //
@@ -125,6 +124,89 @@ function deny(code, error) {
   return json(401, { error, code });
 }
 
+// ---- Admins ----
+//
+// An admin is either someone signed in with a ViTrox account on the admin list,
+// or anyone holding the admin password (kept as a back door, so a Google
+// problem can never lock the store's owner out).
+
+// Used until the list has been edited from the store's Admins window.
+const DEFAULT_ADMINS = ['yi-cong.ng@vitrox.com'];
+const MAX_ADMINS = 10;
+const ADMIN_EMAIL_RE = new RegExp(`^[a-z0-9._%+-]+@(${ALLOWED_DOMAINS.map((d) => d.replace(/\./g, '\\.')).join('|')})$`);
+
+let cachedAdmins = null;
+let adminsAt = 0;
+
+async function loadAdmins({ fresh = false } = {}) {
+  if (!fresh && cachedAdmins && Date.now() - adminsAt < CONFIG_TTL_MS) return cachedAdmins;
+  const saved = await getAdminList();
+  const emails = saved && Array.isArray(saved.emails) ? saved.emails.filter((e) => typeof e === 'string' && e) : [];
+  cachedAdmins = emails.length ? emails : DEFAULT_ADMINS.slice();
+  adminsAt = Date.now();
+  return cachedAdmins;
+}
+
+// Checks and saves a new admin list. Returns { ok, admins } or { ok: false, error }.
+async function saveAdmins(list) {
+  const emails = [];
+  for (const raw of Array.isArray(list) ? list : []) {
+    const email = clean(raw).toLowerCase();
+    if (!email) continue;
+    if (!ADMIN_EMAIL_RE.test(email)) {
+      return { ok: false, error: `"${email.slice(0, 60)}" is not a ViTrox email (it must end in @${ALLOWED_DOMAINS[0]})` };
+    }
+    if (!emails.includes(email)) emails.push(email);
+  }
+  if (emails.length === 0) return { ok: false, error: 'Keep at least one admin' };
+  if (emails.length > MAX_ADMINS) return { ok: false, error: `${MAX_ADMINS} admins at most` };
+  await saveAdminList({ emails, updatedAt: new Date().toISOString() });
+  cachedAdmins = emails;
+  adminsAt = Date.now();
+  return { ok: true, admins: emails };
+}
+
+async function isAdminEmail(email) {
+  return Boolean(email) && (await loadAdmins()).includes(String(email).toLowerCase());
+}
+
+function passwordOk(event) {
+  const provided = (event.headers && event.headers['x-admin-password']) || '';
+  const expected = process.env.STORE_ADMIN_PASSWORD || '';
+  if (!expected || !provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+// Who is acting as admin on this request, or null:
+//   { email, name, via: 'account' | 'password' }
+// Remembered on the event, so the activity log knows who made a change.
+async function adminFor(event) {
+  if (event.__adminChecked) return event.__admin;
+  const user = await readSession(event);
+  let actor = null;
+  if (user && (await isAdminEmail(user.email))) {
+    actor = { email: user.email, name: user.name, via: 'account' };
+  } else if (passwordOk(event)) {
+    actor = user ? { email: user.email, name: user.name, via: 'password' } : { email: '', name: '', via: 'password' };
+  }
+  event.__adminChecked = true;
+  event.__admin = actor;
+  return actor;
+}
+
+async function isAdmin(event) {
+  return Boolean(await adminFor(event));
+}
+
+// null when the request may go ahead, otherwise the response to send back.
+async function requireAdmin(event) {
+  if (await isAdmin(event)) return null;
+  return json(401, { error: 'Admin access required', code: 'admin_required' });
+}
+
 const SESSION_EXPIRED = () => deny('session_expired', 'Your sign-in has expired — please sign in again.');
 
 // Called at the top of every store function. Returns { response } when the
@@ -134,9 +216,9 @@ const SESSION_EXPIRED = () => deny('session_expired', 'Your sign-in has expired 
 //  - When sign-in is required, only signed-in staff get through. A valid admin
 //    password also gets through, so an admin can never be locked out.
 async function checkAccess(event) {
-  const admin = isAdmin(event);
   const user = await readSession(event);
   if (sessionToken(event) && !user) return { response: SESSION_EXPIRED() };
+  const admin = await isAdmin(event);
 
   const config = await loadConfig();
   if (config.requireSignIn && !user && !admin) {
@@ -234,4 +316,10 @@ module.exports = {
   writeProfile,
   validEmployeeNo,
   verifyGoogleCredential,
+  loadAdmins,
+  saveAdmins,
+  isAdminEmail,
+  adminFor,
+  isAdmin,
+  requireAdmin,
 };

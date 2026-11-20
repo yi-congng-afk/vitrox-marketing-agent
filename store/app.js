@@ -14,6 +14,8 @@ const API = {
 const GOOGLE_CLIENT_ID = '725610917729-tou01tupum34inr9smfeb9codh1dounr.apps.googleusercontent.com';
 
 const ADMIN_PW_KEY = 'vitroxStoreAdminPw';
+// Set while an admin who is signed in with their ViTrox account has Admin on.
+const ADMIN_MODE_KEY = 'vitroxStoreAdminMode';
 const CART_KEY = 'vitroxStoreCart';
 const USER_KEY = 'vitroxStoreUser';
 const ITEMS_CACHE_KEY = 'vitroxStoreItemsCache';
@@ -135,12 +137,31 @@ let cart = (() => {
 
 // ---------- Admin session ----------
 
-function isAdminUnlocked() {
+// Admin mode is on when either the admin password was entered in this tab, or
+// someone on the admin list is signed in and switched Admin on. The server
+// checks every admin action again either way.
+let accountAdminOn = (() => {
+  try {
+    return sessionStorage.getItem(ADMIN_MODE_KEY) === '1';
+  } catch {
+    return false;
+  }
+})();
+
+function isAccountAdmin() {
+  return Boolean(session && session.user && session.user.isAdmin);
+}
+
+function hasAdminPassword() {
   try {
     return Boolean(sessionStorage.getItem(ADMIN_PW_KEY));
   } catch {
     return false;
   }
+}
+
+function isAdminUnlocked() {
+  return hasAdminPassword() || (accountAdminOn && isAccountAdmin());
 }
 
 function adminHeaders() {
@@ -153,18 +174,38 @@ function adminHeaders() {
   return pw ? { 'x-admin-password': pw } : {};
 }
 
+function setAccountAdminOn(on) {
+  accountAdminOn = on;
+  try {
+    if (on) sessionStorage.setItem(ADMIN_MODE_KEY, '1');
+    else sessionStorage.removeItem(ADMIN_MODE_KEY);
+  } catch {
+    // Still works for this page; just not remembered across reloads.
+  }
+}
+
+function unlockWithAccount() {
+  setAccountAdminOn(true);
+  updateAdminUI();
+}
+
 function lockAdmin() {
   try {
     sessionStorage.removeItem(ADMIN_PW_KEY);
   } catch {
     // nothing to clear
   }
+  setAccountAdminOn(false);
   updateAdminUI();
-  if (!el('detail-modal').hidden) renderHistory();
 }
+
+let adminUIUnlocked = null;
 
 function updateAdminUI() {
   const unlocked = isAdminUnlocked();
+  const changed = adminUIUnlocked !== null && adminUIUnlocked !== unlocked;
+  adminUIUnlocked = unlocked;
+  if (changed && !el('detail-modal').hidden) renderHistory();
   const btn = el('admin-btn');
   btn.innerHTML = `${icon(unlocked ? 'unlock' : 'lock')}<span class="btn-label">${unlocked ? 'Admin · On' : 'Admin'}</span>`;
   btn.classList.toggle('is-on', unlocked);
@@ -283,7 +324,7 @@ async function send(url, method, body, token) {
 // reading; not for a record that would then be saved without the person's name).
 async function request(url, { method = 'GET', body, admin = false, anonymousOk = method === 'GET' } = {}) {
   const sentToken = session ? session.token : null;
-  const sentAdmin = isAdminUnlocked();
+  const sentAdmin = hasAdminPassword();
 
   let sent = await send(url, method, body, sentToken);
   if (!sent) return OFFLINE();
@@ -331,13 +372,20 @@ async function request(url, { method = 'GET', body, admin = false, anonymousOk =
   }
 
   if (admin && (res.status === 401 || res.status === 403)) {
+    const viaAccount = !sentAdmin && isAccountAdmin();
+    if (viaAccount && session) {
+      // The server no longer lists this account as an admin.
+      setSession({ token: session.token, user: { ...session.user, isAdmin: false } });
+    }
     lockAdmin();
     return {
       ok: false,
       status: res.status,
       data,
       unauthorized: true,
-      error: 'Admin session expired or incorrect password — please unlock Admin again.',
+      error: viaAccount
+        ? 'Your ViTrox account no longer has admin access. Ask an admin, or unlock with the admin password.'
+        : 'Admin session expired or incorrect password — please unlock Admin again.',
     };
   }
   if (!res.ok) {
@@ -393,9 +441,9 @@ function showToast(message, type = '', duration) {
 
 // Windows opened from another window (e.g. "Report Issue" from an item) go
 // back to that window when they are closed, instead of dropping to the grid.
-const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal']);
+const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal', 'admins-modal']);
 // Forms where a stray click outside should not throw away what was typed.
-const KEEP_ON_BACKDROP = new Set(['item-form-modal', 'txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'return-modal', 'categories-modal', 'cleanup-modal']);
+const KEEP_ON_BACKDROP = new Set(['item-form-modal', 'txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'return-modal', 'categories-modal', 'cleanup-modal', 'admins-modal']);
 const returnTo = {};
 let focusBeforeModal = null;
 
@@ -619,6 +667,11 @@ function requireAdminThen(action) {
     action();
     return;
   }
+  if (isAccountAdmin()) {
+    unlockWithAccount();
+    action();
+    return;
+  }
   pendingAdminAction = action;
   showAdminPrompt();
 }
@@ -627,6 +680,9 @@ el('admin-btn').addEventListener('click', () => {
   if (isAdminUnlocked()) {
     lockAdmin();
     showToast('Admin mode locked.');
+  } else if (isAccountAdmin()) {
+    unlockWithAccount();
+    showToast(`Admin mode on — signed in as ${session.user.email}.`, 'success');
   } else {
     pendingAdminAction = null;
     showAdminPrompt();
@@ -764,7 +820,11 @@ function updateAccountUI() {
 
   syncPersonFields();
   if (!el('account-modal').hidden) renderAccountModal();
-  updateGate();
+  // Signing out (or losing admin rights) also switches account-based Admin off.
+  // (A sign-in saved before admins existed has no isAdmin yet; the server check
+  // on page load fills it in.)
+  if (accountAdminOn && (!session || session.user.isAdmin === false)) setAccountAdminOn(false);
+  updateAdminUI();
 }
 
 function renderAccountModal() {
@@ -974,7 +1034,13 @@ async function onGoogleCredential(response) {
     openAccountModal();
   } else {
     closeModal('account-modal');
-    showToast(`Signed in as ${user.name}.`, 'success');
+    showToast(
+      user.isAdmin && !isAdminUnlocked()
+        ? `Signed in as ${user.name}. You are an admin — press Admin to switch admin tools on, no password needed.`
+        : `Signed in as ${user.name}.`,
+      'success',
+      user.isAdmin ? 6000 : undefined
+    );
   }
 }
 
@@ -2533,7 +2599,7 @@ async function deleteMoveOut(group) {
     title: 'Delete this move-out?',
     message:
       `${what} — for ${group.purpose || 'no purpose given'}. ${effects.join(' ')} ` +
-      'Use this only for a mistake or a test. To tidy up old history without changing stock, use Clear Old History instead.',
+      'Use this only for a mistake or a test. To tidy up old history without changing stock, use Clear History in the admin tools instead.',
     confirmLabel: 'Delete move-out',
   });
   if (!confirmed) return;
@@ -3106,6 +3172,174 @@ el('cleanup-backup-btn').addEventListener('click', (e) => {
   const btn = e.currentTarget;
   withBusy(btn, downloadBackup);
 });
+
+// ---------- Admin: activity log ----------
+
+let auditEntries = [];
+let auditMonth = '';
+let auditLoadSeq = 0;
+
+// "2026-11" -> "November 2026"
+function monthLabel(ym) {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym || '');
+  if (!m) return ym || '';
+  return new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+function auditWho(entry) {
+  if (entry.via === 'password') {
+    return entry.email ? `${entry.name || entry.email} (with the admin password)` : 'Someone with the admin password';
+  }
+  return entry.name || entry.email || 'Unknown';
+}
+
+function renderAudit() {
+  const list = el('audit-list');
+  const q = el('audit-search').value.trim().toLowerCase();
+  const shown = q
+    ? auditEntries.filter((e) => [e.summary, e.name, e.email, e.action].join(' ').toLowerCase().includes(q))
+    : auditEntries;
+  if (shown.length === 0) {
+    list.innerHTML = `<p class="muted-text">${auditEntries.length ? 'No changes match that search.' : `No admin changes in ${escapeHtml(monthLabel(auditMonth))}.`}</p>`;
+    return;
+  }
+  list.innerHTML = shown
+    .map(
+      (e) =>
+        `<div class="audit-row">` +
+        `<div class="audit-meta"><strong title="${escapeHtml(e.email || '')}">${escapeHtml(auditWho(e))}</strong>` +
+        `<span>${escapeHtml(fmtDateTime(e.at))}</span></div>` +
+        `<p>${escapeHtml(e.summary)}</p>` +
+        `</div>`
+    )
+    .join('');
+}
+
+async function loadAudit(month) {
+  const seq = ++auditLoadSeq;
+  el('audit-list').innerHTML = '<p class="muted-text">Loading…</p>';
+  const res = await request(`${API.admin}?action=log${month ? `&month=${encodeURIComponent(month)}` : ''}`, { admin: true });
+  if (seq !== auditLoadSeq) return;
+  if (!res.ok) {
+    el('audit-list').innerHTML = `<p class="error-text">${escapeHtml(res.error)}</p>`;
+    return;
+  }
+  auditEntries = Array.isArray(res.data.entries) ? res.data.entries : [];
+  auditMonth = res.data.month;
+  el('audit-month').innerHTML = (res.data.months || [auditMonth])
+    .map((m) => `<option value="${escapeHtml(m)}"${m === auditMonth ? ' selected' : ''}>${escapeHtml(monthLabel(m))}</option>`)
+    .join('');
+  renderAudit();
+}
+
+function openAuditModal() {
+  el('audit-search').value = '';
+  auditEntries = [];
+  openModal('audit-modal');
+  loadAudit('');
+}
+
+el('audit-btn').addEventListener('click', () => requireAdminThen(openAuditModal));
+el('audit-month').addEventListener('change', (e) => loadAudit(e.target.value));
+el('audit-search').addEventListener('input', renderAudit);
+
+// ---------- Admin: who the admins are ----------
+
+let adminRows = [];
+let adminYou = null;
+
+function renderAdminRows() {
+  el('admins-list').innerHTML = adminRows
+    .map(
+      (email, i) =>
+        `<li class="category-row">` +
+        `<span class="admin-email">${escapeHtml(email)}${email === adminYou ? ' <span class="category-count">you</span>' : ''}</span>` +
+        `<button type="button" class="icon-btn danger-text" data-admin-remove="${i}" ${adminRows.length === 1 ? 'disabled' : ''} ` +
+        `aria-label="Remove ${escapeHtml(email)}" title="${adminRows.length === 1 ? 'Keep at least one admin' : 'Remove'}">${icon('trash')}</button>` +
+        `</li>`
+    )
+    .join('');
+}
+
+async function openAdminsModal() {
+  setFormError('admins-form-error', '');
+  el('admin-new').value = '';
+  el('admins-list').innerHTML = '<li class="muted-text">Loading…</li>';
+  openModal('admins-modal');
+  const res = await request(`${API.admin}?action=admins`, { admin: true });
+  if (!res.ok) {
+    el('admins-list').innerHTML = '';
+    setFormError('admins-form-error', res.error);
+    return;
+  }
+  adminRows = res.data.admins.slice();
+  adminYou = res.data.you;
+  renderAdminRows();
+}
+
+function addAdminRow() {
+  const email = el('admin-new').value.trim().toLowerCase();
+  if (!/^[^\s@]+@vitrox\.com$/.test(email)) {
+    setFormError('admins-form-error', 'Enter a ViTrox email address (ending in @vitrox.com).');
+    return;
+  }
+  if (adminRows.includes(email)) {
+    setFormError('admins-form-error', `${email} is already an admin.`);
+    return;
+  }
+  setFormError('admins-form-error', '');
+  adminRows.push(email);
+  el('admin-new').value = '';
+  renderAdminRows();
+}
+
+el('admins-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-admin-remove]');
+  if (!btn || btn.disabled) return;
+  adminRows.splice(Number(btn.dataset.adminRemove), 1);
+  renderAdminRows();
+});
+el('admin-add-btn').addEventListener('click', addAdminRow);
+el('admin-new').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addAdminRow();
+  }
+});
+
+el('admins-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  withBusy(submitButton(e.currentTarget), async () => {
+    setFormError('admins-form-error', '');
+    // A typed address not yet added with the Add button still counts.
+    if (el('admin-new').value.trim()) {
+      addAdminRow();
+      if (!el('admins-form-error').hidden) return;
+    }
+    if (adminYou && !adminRows.includes(adminYou)) {
+      const ok = await confirmDialog({
+        title: 'Remove yourself as admin?',
+        message: 'Your ViTrox account will no longer unlock admin tools. You can still get in with the admin password.',
+        confirmLabel: 'Remove me',
+      });
+      if (!ok) return;
+    }
+    const res = await request(`${API.admin}?action=admins`, { method: 'POST', admin: true, body: { admins: adminRows } });
+    if (!res.ok) {
+      setFormError('admins-form-error', res.error);
+      return;
+    }
+    closeModal('admins-modal');
+    showToast('Admins saved.', 'success');
+    // Picks up whether this account is still an admin.
+    if (session && res.data.you) {
+      const stillAdmin = res.data.admins.includes(res.data.you);
+      if (stillAdmin !== Boolean(session.user.isAdmin)) setSession({ token: session.token, user: { ...session.user, isAdmin: stillAdmin } });
+    }
+  });
+});
+
+el('manage-admins-btn').addEventListener('click', () => requireAdminThen(openAdminsModal));
 
 // ---------- CSV exports ----------
 

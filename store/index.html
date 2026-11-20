@@ -96,12 +96,15 @@
           <svg class="icon" aria-hidden="true"><use href="#i-pencil"/></svg> Categories
         </button>
         <button id="cleanup-btn" class="ghost-btn admin-only" type="button" hidden>
-          <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Clear Old History
+          <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Clear History
         </button>
         <button id="backup-btn" class="ghost-btn admin-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Backup
         </button>
         <button id="require-signin-btn" class="ghost-btn admin-only" type="button" hidden></button>
+        <button id="audit-btn" class="ghost-btn admin-only" type="button" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg> Admins &amp; Log
+        </button>
       </div>
 
       <div class="toolbar">
@@ -471,7 +474,7 @@
   <div id="cleanup-modal" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-title" tabindex="-1">
       <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
-      <h2 id="cleanup-title">Clear Old History</h2>
+      <h2 id="cleanup-title">Clear History</h2>
       <p class="subtitle">Removes old records to keep the store tidy. Stock quantities are not changed. Loans still out and open reports are always kept.</p>
       <form id="cleanup-form">
         <label>Clear records from before <input id="cleanup-before" type="date" required /></label>
@@ -486,6 +489,40 @@
         <p id="cleanup-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
           <button id="cleanup-submit-btn" type="submit" class="danger-btn">Check what will be cleared</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="audit-modal" class="modal-overlay" hidden>
+    <div class="modal reports-modal" role="dialog" aria-modal="true" aria-labelledby="audit-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="audit-title"><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg> Admin Log</h2>
+      <p class="subtitle">Every change made with admin tools: who made it, when, and what changed. This log cannot be cleared from the store.</p>
+      <div class="audit-tools">
+        <label>Month <select id="audit-month"></select></label>
+        <label class="audit-search">Search <input id="audit-search" type="search" placeholder="Item, person, action…" /></label>
+        <button id="manage-admins-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg> Manage admins</button>
+      </div>
+      <div id="audit-list" class="audit-list"></div>
+    </div>
+  </div>
+
+  <div id="admins-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="admins-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="admins-title"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg> Admins</h2>
+      <p class="subtitle">People on this list get admin tools when they sign in with their ViTrox account, with no password needed. The admin password still works as a backup.</p>
+      <form id="admins-form">
+        <ul id="admins-list" class="categories-list"></ul>
+        <div class="category-add">
+          <input id="admin-new" type="email" maxlength="120" placeholder="name@vitrox.com" aria-label="New admin's ViTrox email" />
+          <button id="admin-add-btn" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add</button>
+        </div>
+        <p id="admins-form-error" class="error-text" role="alert" hidden></p>
+        <div class="form-actions">
+          <button type="submit" class="primary-btn">Save admins</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
       </form>
@@ -543,7 +580,7 @@
     <div class="modal admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title" tabindex="-1">
       <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
       <h2 id="admin-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg> Admin Access</h2>
-      <p class="subtitle">Enter the admin password to add stock, add, edit or remove items, and resolve reports.</p>
+      <p class="subtitle">Enter the admin password to add stock, add, edit or remove items, and resolve reports. Admins signed in with their ViTrox account do not need it.</p>
       <form id="admin-form">
         <label>Admin password
           <input id="admin-password-input" type="password" autocomplete="current-password" required data-autofocus />

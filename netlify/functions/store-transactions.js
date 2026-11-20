@@ -2,6 +2,16 @@ const { getItems, saveItems, getTransactions, saveTransactions, genId } = requir
 const { sendAlertEmail } = require('./_shared/mailer');
 const { requireAdmin } = require('./_shared/store-auth');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
+const { audit, describeChanges } = require('./_shared/audit');
+
+const TXN_FIELDS = [
+  ['type', 'type'],
+  ['quantity', 'quantity', 'number'],
+  ['name', 'name'],
+  ['employeeNo', 'employee no.'],
+  ['remarks', 'remarks'],
+];
+const verb = (type) => (type === 'add' ? 'add-on' : 'move-out');
 
 exports.handler = async (event) => {
   const method = event.httpMethod;
@@ -37,7 +47,7 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'itemId and a valid type (add/remove) are required' }) };
     }
     if (type === 'add') {
-      const adminError = requireAdmin(event);
+      const adminError = await requireAdmin(event);
       if (adminError) return adminError;
     }
     const qty = Math.round(Number(quantity));
@@ -86,6 +96,9 @@ exports.handler = async (event) => {
     const transactions = await getTransactions();
     transactions.push(transaction);
     await saveTransactions(transactions);
+    if (type === 'add') {
+      await audit(event, 'stock.add', `Added stock: "${item.name}" +${qty} (${quantityBefore} → ${item.quantity})${transaction.remarks ? ` — ${transaction.remarks}` : ''}`);
+    }
 
     const justCrossedLowStock =
       type === 'remove' && quantityBefore > item.lowStockThreshold && item.quantity <= item.lowStockThreshold;
@@ -105,7 +118,7 @@ exports.handler = async (event) => {
   }
 
   if (method === 'PATCH') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;
@@ -168,6 +181,10 @@ exports.handler = async (event) => {
       editedAt: new Date().toISOString(),
     };
     await saveTransactions(transactions);
+    const changes = describeChanges(original, transactions[index], TXN_FIELDS);
+    if (changes) {
+      await audit(event, 'activity.edit', `Edited ${verb(original.type)} record of "${original.itemName}" by ${original.name}: ${changes}`);
+    }
 
     return {
       statusCode: 200,
@@ -177,7 +194,7 @@ exports.handler = async (event) => {
   }
 
   if (method === 'DELETE') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;
@@ -203,6 +220,12 @@ exports.handler = async (event) => {
 
     const [removed] = transactions.splice(index, 1);
     await saveTransactions(transactions);
+    await audit(
+      event,
+      'activity.delete',
+      `Deleted ${verb(removed.type)} record: "${removed.itemName}" ×${removed.quantity} by ${removed.name}` +
+        `${removed.remarks ? ` (${removed.remarks})` : ''}${item ? ` — stock now ${item.quantity}` : ''}`
+    );
 
     return {
       statusCode: 200,

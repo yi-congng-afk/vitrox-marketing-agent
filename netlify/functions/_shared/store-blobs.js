@@ -102,6 +102,34 @@ async function saveReminderLog(log) {
   await configStore().setJSON('reminders', log);
 }
 
+// Who the admins are (by ViTrox email). Missing means "not edited yet".
+async function getAdminList() {
+  return configStore().get('admins', { type: 'json' });
+}
+
+async function saveAdminList(value) {
+  await configStore().setJSON('admins', value);
+}
+
+// ---- Admin activity log: one list per month (Malaysia time), e.g. "2026-11" ----
+
+function auditStore() {
+  return getStore(storeConfig('vitrox-store-audit'));
+}
+
+async function getAuditMonth(month) {
+  return (await auditStore().get(month, { type: 'json' })) || [];
+}
+
+async function saveAuditMonth(month, entries) {
+  await auditStore().setJSON(month, entries);
+}
+
+async function listAuditMonths() {
+  const { blobs } = await auditStore().list();
+  return (blobs || []).map((b) => b.key).filter((k) => /^\d{4}-\d{2}$/.test(k)).sort().reverse();
+}
+
 // One small blob per person, so two people signing in at the same moment can
 // never overwrite each other's details.
 async function getProfile(key) {
@@ -273,6 +301,11 @@ module.exports = {
   saveReminderLog,
   getProfile,
   saveProfile,
+  getAdminList,
+  saveAdminList,
+  getAuditMonth,
+  saveAuditMonth,
+  listAuditMonths,
   IMAGE_FIELDS,
   isInlineImage,
   saveImage,

@@ -3,6 +3,17 @@ const { getItems, saveItems, getLoans, saveLoans, getReminderLog, genId } = requ
 const { checkAccess, recordedBy } = require('./_shared/store-access');
 const { runReminders, REMIND_EVERY_DAYS } = require('./_shared/reminders');
 const { emailConfigured } = require('./_shared/mailer');
+const { audit, describeChanges } = require('./_shared/audit');
+
+const LOAN_FIELDS = [
+  ['quantity', 'borrowed', 'number'],
+  ['quantityReturned', 'returned', 'number'],
+  ['name', 'name'],
+  ['employeeNo', 'employee no.'],
+  ['email', 'email'],
+  ['purpose', 'purpose'],
+  ['expectedReturnDate', 'due back'],
+];
 
 function json(statusCode, payload) {
   return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
@@ -18,7 +29,7 @@ exports.handler = async (event) => {
   // Overdue reminder emails (admin only): GET ?view=reminders shows the last
   // run, POST ?action=remind runs it now (same rules as the daily run).
   if (params.view === 'reminders' || params.action === 'remind') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
     if (method === 'GET' && params.view === 'reminders') {
       const log = await getReminderLog();
@@ -26,6 +37,13 @@ exports.handler = async (event) => {
     }
     if (method === 'POST' && params.action === 'remind') {
       const lastRun = await runReminders({ trigger: 'admin' });
+      await audit(
+        event,
+        'reminders.send',
+        lastRun.emailReady
+          ? `Sent overdue reminders now: ${lastRun.peopleEmailed || 0} people emailed, ${lastRun.overdue || 0} overdue loans`
+          : 'Tried to send overdue reminders, but email is not set up'
+      );
       return json(200, { emailReady: lastRun.emailReady, everyDays: REMIND_EVERY_DAYS, lastRun });
     }
     return { statusCode: 405, body: 'Method Not Allowed' };
@@ -180,7 +198,7 @@ exports.handler = async (event) => {
   // Admin correction of a loan record: who, what for, when due, how many out
   // and how many back. The item's "on loan" count follows the change.
   if (method === 'PUT') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
     if (!params.id) return json(400, { error: 'Missing id query parameter' });
 
@@ -223,6 +241,7 @@ exports.handler = async (event) => {
     }
 
     const now = new Date().toISOString();
+    const before = { ...loan };
     if (returned !== loan.quantityReturned) {
       if (!Array.isArray(loan.returns)) loan.returns = [];
       const by = access.user ? { name: access.user.name, employeeNo: access.user.employeeNo || '', email: access.user.email } : { name: 'Admin', employeeNo: '' };
@@ -246,11 +265,13 @@ exports.handler = async (event) => {
       item.updatedAt = now;
     }
     await Promise.all([saveLoans(loans), item && extraOut !== 0 ? saveItems(items) : null]);
+    const changes = describeChanges(before, loan, LOAN_FIELDS);
+    if (changes) await audit(event, 'loan.edit', `Edited loan of "${loan.itemName}" (${before.name}, ${before.purpose}): ${changes}`);
     return json(200, { loan, item: item || null });
   }
 
   if (method === 'DELETE') {
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;
@@ -274,6 +295,12 @@ exports.handler = async (event) => {
 
     const [removed] = loans.splice(index, 1);
     await saveLoans(loans);
+    await audit(
+      event,
+      'loan.delete',
+      `Deleted loan record: "${removed.itemName}" ×${removed.quantity} borrowed by ${removed.name} for ${removed.purpose}` +
+        ` (${removed.quantityReturned} returned${outstanding ? `, ${outstanding} no longer counted as on loan` : ''})`
+    );
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loan: removed, item }) };
   }

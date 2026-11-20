@@ -10,6 +10,7 @@ const {
 const { sendAlertEmail } = require('./_shared/mailer');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
 const { requireAdmin } = require('./_shared/store-auth');
+const { audit } = require('./_shared/audit');
 
 function json(statusCode, payload) {
   return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
@@ -21,7 +22,7 @@ function json(statusCode, payload) {
 // Admin: delete a whole move-out (every record from one checkout, or a single
 // record from before carts existed) — for mistakes and tests. Consumables go
 // back into stock; loaned items stop counting as out on loan.
-async function deleteMoveOut(id) {
+async function deleteMoveOut(id, event) {
   const [items, transactions, loans] = await Promise.all([getItems(), getTransactions(), getLoans()]);
   const inGroup = (r) => r.checkoutId === id || r.id === id;
   const txns = transactions.filter((t) => t.type === 'remove' && inGroup(t));
@@ -49,6 +50,14 @@ async function deleteMoveOut(id) {
     txns.length ? saveTransactions(transactions.filter((t) => !txns.includes(t))) : null,
     groupLoans.length ? saveLoans(loans.filter((l) => !groupLoans.includes(l))) : null,
   ]);
+  const first = txns[0] || groupLoans[0];
+  const lines = [...txns.map((t) => `"${t.itemName}" ×${t.quantity}`), ...groupLoans.map((l) => `"${l.itemName}" ×${l.quantity} (loan)`)];
+  await audit(
+    event,
+    'moveout.delete',
+    `Deleted move-out by ${first.name} for ${first.remarks || first.purpose || '(no purpose)'}: ${lines.join(', ')}` +
+      (txns.length ? ' — consumables put back into stock' : '')
+  );
   return json(200, { deleted: { transactions: txns.length, loans: groupLoans.length } });
 }
 
@@ -56,11 +65,11 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'DELETE') {
     const access = await checkAccess(event);
     if (access.response) return access.response;
-    const adminError = requireAdmin(event);
+    const adminError = await requireAdmin(event);
     if (adminError) return adminError;
     const id = event.queryStringParameters && event.queryStringParameters.id;
     if (!id) return json(400, { error: 'Missing id query parameter' });
-    return deleteMoveOut(id);
+    return deleteMoveOut(id, event);
   }
   if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
 
