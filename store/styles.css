@@ -1553,3 +1553,98 @@ button.low-stock-row:hover { background: var(--accent-soft); }
 .audit-row p { margin: 0.25rem 0 0; font-size: 0.9rem; overflow-wrap: anywhere; }
 .admin-email { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 0.35rem 0; }
 .admin-email .category-count { min-width: 0; margin-left: 0.35rem; }
+
+/* ---------- QR labels ---------- */
+
+.labels-modal { max-width: 620px; }
+.labels-kind { border: none; padding: 0; margin: 0 0 0.75rem; display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; }
+.labels-kind legend { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }
+.labels-pick-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.4rem; }
+.labels-pick-head input { flex: 1; min-width: 0; }
+.labels-list {
+  list-style: none;
+  margin: 0 0 0.85rem;
+  padding: 0.35rem 0.6rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 0.15rem;
+}
+.labels-list li[hidden] { display: none; }
+.labels-kind .checkbox-label,
+.labels-list .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.3rem 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+.labels-kind .checkbox-label input,
+.labels-list .checkbox-label input { width: auto; flex: none; margin: 0; }
+.labels-kind .checkbox-label { font-weight: 500; }
+.labels-list .checkbox-label > span { min-width: 0; }
+.labels-list li + li { border-top: 1px solid var(--border); }
+
+/* Many admin tools: slightly smaller buttons so they fit on one row. */
+.admin-bar .primary-btn, .admin-bar .ghost-btn { min-height: 36px; padding: 0.4rem 0.7rem; font-size: 0.82rem; gap: 0.35rem; }
+.admin-bar { gap: 0.45rem; }
+.labels-list .muted-text { font-size: 0.8rem; }
+.labels-preview-wrap { margin: 0.25rem 0 0.5rem; }
+.labels-preview-caption { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.35rem; }
+.labels-preview { max-width: 100%; overflow-x: auto; }
+.labels-preview .qr-label { border: 1px dashed var(--border-strong); border-radius: 2mm; }
+.labels-preview:empty { display: none; }
+
+/* One label, sized in real millimetres so it lands on the sticker. */
+.qr-label {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 2.5mm;
+  padding: 2.5mm 3mm;
+  overflow: hidden;
+  background: #fff;
+  color: #000;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.size-std .qr-label { width: 63.5mm; height: 38.1mm; }
+.size-lg .qr-label { width: 99.1mm; height: 67.7mm; padding: 4mm 5mm; gap: 4mm; }
+.qr-code { flex: none; }
+.size-std .qr-code { width: 30mm; height: 30mm; }
+.size-lg .qr-code { width: 52mm; height: 52mm; }
+.qr-code svg { display: block; width: 100%; height: 100%; }
+.qr-text { min-width: 0; display: flex; flex-direction: column; gap: 1mm; }
+.qr-text strong {
+  font-size: 10pt;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.qr-sub { font-size: 7pt; line-height: 1.2; overflow-wrap: anywhere; }
+.qr-brand { font-size: 5.5pt; color: #444; margin-top: 0.5mm; }
+.size-lg .qr-text strong { font-size: 15pt; -webkit-line-clamp: 4; }
+.size-lg .qr-sub { font-size: 10pt; }
+.size-lg .qr-brand { font-size: 7.5pt; }
+
+/* Printed sheets: A4, laid out like common sticker sheets (L7160 / L7165). */
+#print-area { display: none; }
+.label-page { box-sizing: border-box; width: 210mm; height: 297mm; display: grid; align-content: start; overflow: hidden; break-after: page; page-break-after: always; }
+.label-page:last-child { break-after: auto; page-break-after: auto; }
+.label-page.size-std { padding: 15.15mm 7.2mm 0; grid-template-columns: repeat(3, 63.5mm); grid-auto-rows: 38.1mm; column-gap: 2.5mm; }
+.label-page.size-lg { padding: 13.1mm 4.65mm 0; grid-template-columns: repeat(2, 99.1mm); grid-auto-rows: 67.7mm; column-gap: 2.5mm; }
+
+@media print {
+  @page { size: A4; margin: 0; }
+  body.printing-labels { background: #fff !important; }
+  body.printing-labels > *:not(#print-area) { display: none !important; }
+  body.printing-labels #print-area { display: block; }
+  body.printing-labels .qr-label { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

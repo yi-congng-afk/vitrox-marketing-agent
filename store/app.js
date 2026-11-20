@@ -441,7 +441,7 @@ function showToast(message, type = '', duration) {
 
 // Windows opened from another window (e.g. "Report Issue" from an item) go
 // back to that window when they are closed, instead of dropping to the grid.
-const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal', 'admins-modal']);
+const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal', 'admins-modal', 'labels-modal']);
 // Forms where a stray click outside should not throw away what was typed.
 const KEEP_ON_BACKDROP = new Set(['item-form-modal', 'txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'return-modal', 'categories-modal', 'cleanup-modal', 'admins-modal']);
 const returnTo = {};
@@ -1274,6 +1274,7 @@ async function runLoadItems({ silent = false } = {}) {
   // The list came back without a sign-in, so sign-in is no longer compulsory.
   if (isGated()) setRequireSignIn(false);
   applyItems(res.data.items || [], res.data.categories || []);
+  followPendingLink();
   return true;
 }
 
@@ -3340,6 +3341,308 @@ el('admins-form').addEventListener('submit', (e) => {
 });
 
 el('manage-admins-btn').addEventListener('click', () => requireAdminThen(openAdminsModal));
+
+// ---------- QR labels ----------
+//
+// A label is a QR code holding a link to this page with ?item=<id> (one item)
+// or ?loc=<storage location> (a shelf). Scanning it with a phone camera opens
+// the store at that item, or lists what is kept on that shelf.
+
+const LABEL_SIZES = {
+  std: { perPage: 21, name: 'Standard' },
+  lg: { perPage: 8, name: 'Large' },
+};
+const MAX_LABELS = 600;
+
+let qrLibPromise = null;
+
+// The QR library (store/vendor/qrcode.js) is only fetched when labels are made.
+function loadQrLib() {
+  if (window.qrcode) return Promise.resolve(window.qrcode);
+  if (!qrLibPromise) {
+    qrLibPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'vendor/qrcode.js';
+      script.onload = () => (window.qrcode ? resolve(window.qrcode) : reject(new Error('QR library did not load')));
+      script.onerror = () => {
+        qrLibPromise = null;
+        reject(new Error('Could not load the QR code maker — check your connection and try again.'));
+      };
+      document.head.appendChild(script);
+    });
+  }
+  return qrLibPromise;
+}
+
+function pageBaseUrl() {
+  return location.href.split(/[?#]/)[0];
+}
+
+function itemLabelUrl(item) {
+  return `${pageBaseUrl()}?item=${encodeURIComponent(item.id)}`;
+}
+
+function locationLabelUrl(loc) {
+  return `${pageBaseUrl()}?loc=${encodeURIComponent(loc)}`;
+}
+
+function qrSvg(text) {
+  const qr = window.qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  return qr.createSvgTag({ cellSize: 1, margin: 2, scalable: true });
+}
+
+// Distinct storage locations (as typed on items), with how many items each has.
+function storageLocations() {
+  const byKey = new Map();
+  items.forEach((item) => {
+    const loc = String(item.locationText || '').trim().replace(/\s+/g, ' ');
+    if (!loc) return;
+    const key = loc.toLowerCase();
+    if (!byKey.has(key)) byKey.set(key, { loc, count: 0 });
+    byKey.get(key).count++;
+  });
+  return [...byKey.values()].sort((a, b) => a.loc.localeCompare(b.loc));
+}
+
+// Everything that can be printed for the chosen kind: [{ key, title, subs, url, search }]
+function labelChoices(kind) {
+  if (kind === 'loc') {
+    return storageLocations().map(({ loc, count }) => ({
+      key: `loc:${loc.toLowerCase()}`,
+      title: loc,
+      subs: [`${plural(count, 'item', 'items')} kept here`],
+      url: locationLabelUrl(loc),
+      search: loc,
+    }));
+  }
+  return items
+    .slice()
+    .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+    .map((item) => ({
+      key: `item:${item.id}`,
+      title: item.name,
+      subs: [item.category, item.locationText ? `Location: ${item.locationText}` : ''].filter(Boolean),
+      url: itemLabelUrl(item),
+      search: `${item.name} ${item.category} ${item.locationText || ''}`,
+    }));
+}
+
+const labelPicks = new Set();
+
+function labelKind() {
+  const checked = document.querySelector('input[name="labels-kind"]:checked');
+  return checked ? checked.value : 'item';
+}
+
+function labelHtml(choice) {
+  return (
+    `<div class="qr-label">` +
+    `<div class="qr-code">${qrSvg(choice.url)}</div>` +
+    `<div class="qr-text"><strong>${escapeHtml(choice.title)}</strong>` +
+    choice.subs.map((s) => `<span class="qr-sub">${escapeHtml(s)}</span>`).join('') +
+    `<span class="qr-brand">ViTrox College Store · scan to open</span></div>` +
+    `</div>`
+  );
+}
+
+function pickedChoices() {
+  return labelChoices(labelKind()).filter((c) => labelPicks.has(c.key));
+}
+
+function labelCopies() {
+  return Math.min(50, Math.max(1, Math.round(Number(el('labels-copies').value)) || 1));
+}
+
+function renderLabelList() {
+  const q = el('labels-filter').value.trim().toLowerCase();
+  const choices = labelChoices(labelKind());
+  if (choices.length === 0) {
+    el('labels-list').innerHTML = `<li class="muted-text">${
+      labelKind() === 'loc' ? 'No storage locations yet. Add a location to items (Edit → Location) to print shelf labels.' : 'No items yet.'
+    }</li>`;
+  } else {
+    el('labels-list').innerHTML = choices
+      .map(
+        (c) =>
+          `<li${q && !c.search.toLowerCase().includes(q) ? ' hidden' : ''}><label class="checkbox-label">` +
+          `<input type="checkbox" data-label-key="${escapeHtml(c.key)}"${labelPicks.has(c.key) ? ' checked' : ''} /> ` +
+          `<span><strong>${escapeHtml(c.title)}</strong> <span class="muted-text">${escapeHtml(c.subs.join(' · '))}</span></span>` +
+          `</label></li>`
+      )
+      .join('');
+  }
+  renderLabelSummary();
+}
+
+async function renderLabelSummary() {
+  const picked = pickedChoices();
+  const size = LABEL_SIZES[el('labels-size').value] || LABEL_SIZES.std;
+  const total = picked.length * labelCopies();
+  const sheets = Math.ceil(total / size.perPage);
+  el('labels-summary').textContent = total
+    ? `${plural(total, 'label', 'labels')} on ${plural(sheets, 'A4 sheet', 'A4 sheets')}.`
+    : 'Tick at least one to print.';
+  el('labels-print-btn').disabled = total === 0 || total > MAX_LABELS;
+  if (total > MAX_LABELS) el('labels-summary').textContent += ` That is more than ${MAX_LABELS} at once — print in smaller batches.`;
+
+  const preview = el('labels-preview');
+  preview.className = `labels-preview size-${el('labels-size').value}`;
+  if (!picked.length) {
+    preview.innerHTML = '';
+    return;
+  }
+  try {
+    await loadQrLib();
+  } catch (err) {
+    preview.innerHTML = `<p class="error-text">${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  const first = pickedChoices()[0];
+  preview.innerHTML = first ? labelHtml(first) : '';
+}
+
+// options: { itemIds } to start with just those items ticked.
+function openLabelsModal(options = {}) {
+  labelPicks.clear();
+  document.querySelector('input[name="labels-kind"][value="item"]').checked = true;
+  el('labels-filter').value = '';
+  el('labels-copies').value = '1';
+  setFormError('labels-form-error', '');
+  const startWith = options.itemIds ? options.itemIds : items.map((i) => i.id);
+  startWith.forEach((id) => labelPicks.add(`item:${id}`));
+  openModal('labels-modal');
+  renderLabelList();
+}
+
+el('labels-list').addEventListener('change', (e) => {
+  const key = e.target.dataset.labelKey;
+  if (!key) return;
+  if (e.target.checked) labelPicks.add(key);
+  else labelPicks.delete(key);
+  renderLabelSummary();
+});
+
+document.querySelectorAll('input[name="labels-kind"]').forEach((radio) =>
+  radio.addEventListener('change', () => {
+    // Switching kind starts with everything of that kind ticked.
+    labelPicks.clear();
+    labelChoices(labelKind()).forEach((c) => labelPicks.add(c.key));
+    el('labels-filter').value = '';
+    renderLabelList();
+  })
+);
+
+el('labels-filter').addEventListener('input', renderLabelList);
+el('labels-size').addEventListener('change', renderLabelSummary);
+el('labels-copies').addEventListener('input', renderLabelSummary);
+el('labels-copies').addEventListener('change', renderLabelSummary);
+
+function setVisiblePicks(on) {
+  el('labels-list')
+    .querySelectorAll('li:not([hidden]) input[data-label-key]')
+    .forEach((box) => (on ? labelPicks.add(box.dataset.labelKey) : labelPicks.delete(box.dataset.labelKey)));
+  renderLabelList();
+}
+el('labels-all-btn').addEventListener('click', () => setVisiblePicks(true));
+el('labels-none-btn').addEventListener('click', () => setVisiblePicks(false));
+
+function finishPrinting() {
+  document.body.classList.remove('printing-labels');
+  el('print-area').innerHTML = '';
+}
+window.addEventListener('afterprint', finishPrinting);
+
+el('labels-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  withBusy(el('labels-print-btn'), async () => {
+    setFormError('labels-form-error', '');
+    const picked = pickedChoices();
+    const copies = labelCopies();
+    const sizeKey = LABEL_SIZES[el('labels-size').value] ? el('labels-size').value : 'std';
+    const all = [];
+    picked.forEach((c) => {
+      for (let i = 0; i < copies; i++) all.push(c);
+    });
+    if (all.length === 0) {
+      setFormError('labels-form-error', 'Tick at least one label to print.');
+      return;
+    }
+    if (all.length > MAX_LABELS) {
+      setFormError('labels-form-error', `That is ${all.length} labels — print ${MAX_LABELS} or fewer at a time.`);
+      return;
+    }
+    try {
+      await loadQrLib();
+    } catch (err) {
+      setFormError('labels-form-error', err.message);
+      return;
+    }
+    // Same QR picture for every copy of a label: make each one once.
+    const htmlByKey = new Map();
+    const perPage = LABEL_SIZES[sizeKey].perPage;
+    const pages = [];
+    for (let i = 0; i < all.length; i += perPage) {
+      const cells = all.slice(i, i + perPage).map((c) => {
+        if (!htmlByKey.has(c.key)) htmlByKey.set(c.key, labelHtml(c));
+        return htmlByKey.get(c.key);
+      });
+      pages.push(`<div class="label-page size-${sizeKey}">${cells.join('')}</div>`);
+    }
+    el('print-area').innerHTML = pages.join('');
+    document.body.classList.add('printing-labels');
+    window.print();
+  });
+});
+
+el('labels-btn').addEventListener('click', () => requireAdminThen(() => openLabelsModal()));
+el('detail-label-btn').addEventListener('click', () => requireAdminThen(() => openLabelsModal({ itemIds: [selectedItemId] })));
+
+// ----- Arriving from a scanned label -----
+
+let pendingLink = (() => {
+  try {
+    const params = new URLSearchParams(location.search);
+    const item = params.get('item');
+    const loc = params.get('loc');
+    if (item) return { item };
+    if (loc) return { loc };
+  } catch {
+    // An odd address — just show the store.
+  }
+  return null;
+})();
+
+function clearLinkFromAddress() {
+  try {
+    const url = new URL(location.href);
+    url.searchParams.delete('item');
+    url.searchParams.delete('loc');
+    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+  } catch {
+    // Leaving it in the address bar is harmless.
+  }
+}
+
+// Called once the live stock list has loaded (after sign-in, if that is required).
+function followPendingLink() {
+  if (!pendingLink || isGated()) return;
+  const link = pendingLink;
+  pendingLink = null;
+  clearLinkFromAddress();
+  if (link.item) {
+    const item = items.find((i) => i.id === link.item);
+    if (item) openDetail(item.id);
+    else showToast('That label is for an item that is no longer in the store.', 'error');
+    return;
+  }
+  activeCategory = 'All';
+  renderCategoryChips();
+  el('search-input').value = link.loc;
+  el('search-input').dispatchEvent(new Event('input'));
+  showToast(`Showing what is kept at "${link.loc}". Clear the search to see everything.`, '', 5000);
+}
 
 // ---------- CSV exports ----------
 
