@@ -1,4 +1,4 @@
-const { requireAdmin } = require('./_shared/store-auth');
+const { requireManager } = require('./_shared/store-auth');
 const { getItems, getReports, saveReports, genId } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
@@ -78,7 +78,7 @@ exports.handler = async (event) => {
   }
 
   if (method === 'PATCH') {
-    const adminError = await requireAdmin(event);
+    const adminError = await requireManager(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;
@@ -113,7 +113,7 @@ exports.handler = async (event) => {
   }
 
   if (method === 'DELETE') {
-    const adminError = await requireAdmin(event);
+    const adminError = await requireManager(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;

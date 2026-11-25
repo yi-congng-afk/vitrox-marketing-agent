@@ -151,8 +151,21 @@ let accountAdminOn = (() => {
   }
 })();
 
+// Signed in as someone allowed to switch on the staff tools (admin or Store Manager).
 function isAccountAdmin() {
   return Boolean(session && session.user && session.user.isAdmin);
+}
+
+// 'admin' | 'manager' | null — what the tools are switched on as. The admin
+// password always counts as admin. The server checks every action again.
+function adminRole() {
+  if (hasAdminPassword()) return 'admin';
+  if (!accountAdminOn || !isAccountAdmin()) return null;
+  return session.user.role === 'manager' ? 'manager' : 'admin';
+}
+
+function isFullAdmin() {
+  return adminRole() === 'admin';
 }
 
 function hasAdminPassword() {
@@ -208,9 +221,21 @@ function updateAdminUI() {
   const unlocked = isAdminUnlocked();
   const changed = adminUIUnlocked !== null && adminUIUnlocked !== unlocked;
   adminUIUnlocked = unlocked;
-  if (changed && !el('detail-modal').hidden) renderHistory();
+  if (changed) {
+    if (!unlocked) showArchived = false;
+    if (itemsLoaded) {
+      renderCategoryChips();
+      renderGrid();
+    }
+    if (!el('detail-modal').hidden) {
+      renderHistory();
+      const open = items.find((i) => i.id === selectedItemId);
+      if (open) el('detail-variations').innerHTML = renderVariationChips(open);
+    }
+  }
   const btn = el('admin-btn');
-  btn.innerHTML = `${icon(unlocked ? 'unlock' : 'lock')}<span class="btn-label">${unlocked ? 'Admin · On' : 'Admin'}</span>`;
+  const manager = adminRole() === 'manager';
+  btn.innerHTML = `${icon(unlocked ? 'unlock' : 'lock')}<span class="btn-label">${unlocked ? (manager ? 'Manager · On' : 'Admin · On') : 'Admin'}</span>`;
   btn.classList.toggle('is-on', unlocked);
   const label = unlocked ? 'Admin mode is on — click to lock' : 'Unlock admin mode';
   btn.setAttribute('aria-label', label);
@@ -218,6 +243,12 @@ function updateAdminUI() {
   document.querySelectorAll('.admin-only').forEach((node) => {
     node.hidden = !unlocked;
   });
+  // Admin-only tools (people, settings, categories, housekeeping) stay hidden for Store Managers.
+  document.querySelectorAll('.owner-only').forEach((node) => {
+    node.hidden = !unlocked || manager;
+  });
+  el('admin-bar-role').textContent = manager ? 'Store Manager tools' : 'Admin tools';
+  el('audit-btn').innerHTML = `${icon('clipboard')} ${manager ? 'Activity Log' : 'Admins &amp; Log'}`;
   updateGate();
 }
 
@@ -686,7 +717,7 @@ el('admin-btn').addEventListener('click', () => {
     showToast('Admin mode locked.');
   } else if (isAccountAdmin()) {
     unlockWithAccount();
-    showToast(`Admin mode on — signed in as ${session.user.email}.`, 'success');
+    showToast(`${session.user.role === 'manager' ? 'Store Manager' : 'Admin'} tools on — signed in as ${session.user.email}.`, 'success');
   } else {
     pendingAdminAction = null;
     showAdminPrompt();
@@ -1040,7 +1071,7 @@ async function onGoogleCredential(response) {
     closeModal('account-modal');
     showToast(
       user.isAdmin && !isAdminUnlocked()
-        ? `Signed in as ${user.name}. You are an admin — press Admin to switch admin tools on, no password needed.`
+        ? `Signed in as ${user.name}. You are ${user.role === 'manager' ? 'a Store Manager' : 'an admin'} — press Admin to switch your tools on, no password needed.`
         : `Signed in as ${user.name}.`,
       'success',
       user.isAdmin ? 6000 : undefined
@@ -1335,8 +1366,19 @@ function availableQty(item) {
   return Math.max(0, available || 0);
 }
 
+// Items still in use (archived ones are kept only for their history).
+function activeItems() {
+  return items.filter((i) => !i.archived);
+}
+
+let showArchived = false;
+
 function lowStockItems() {
-  return items.filter((i) => availableQty(i) <= i.lowStockThreshold);
+  return activeItems().filter((i) => availableQty(i) <= i.lowStockThreshold);
+}
+
+function activeVariations(item) {
+  return item.hasVariations && Array.isArray(item.variations) ? item.variations.filter((v) => v.active) : [];
 }
 
 function renderLowStockBanner() {
@@ -1357,14 +1399,15 @@ function renderLowStockBanner() {
 
 function renderCategoryChips() {
   const counts = {};
-  items.forEach((i) => {
+  const listed = activeItems();
+  listed.forEach((i) => {
     counts[i.category] = (counts[i.category] || 0) + 1;
   });
   const unlisted = [...new Set(items.map((i) => i.category))].filter((c) => c && !categories.includes(c));
   el('category-filters').innerHTML = ['All', ...categories, ...unlisted]
     .map((cat) => {
       const active = cat === activeCategory;
-      const count = cat === 'All' ? items.length : counts[cat] || 0;
+      const count = cat === 'All' ? listed.length : counts[cat] || 0;
       return `<button type="button" class="chip${active ? ' active' : ''}" data-category="${escapeHtml(cat)}" aria-pressed="${active}">${escapeHtml(cat)}<span class="chip-count">${count}</span></button>`;
     })
     .join('');
@@ -1382,10 +1425,13 @@ el('category-filters').addEventListener('click', (e) => {
 
 function filteredItems() {
   const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+  const archivedView = showArchived && isAdminUnlocked();
   const list = items.filter((item) => {
+    if (Boolean(item.archived) !== archivedView) return false;
     if (activeCategory !== 'All' && item.category !== activeCategory) return false;
     if (terms.length === 0) return true;
-    const haystack = `${item.name} ${item.category} ${item.locationText || ''} ${item.notes || ''}`.toLowerCase();
+    const designs = (item.variations || []).map((v) => `${v.code} ${v.name}`).join(' ');
+    const haystack = `${item.name} ${item.code || ''} ${item.category} ${item.locationText || ''} ${item.notes || ''} ${designs}`.toLowerCase();
     return terms.every((term) => haystack.includes(term));
   });
 
@@ -1408,13 +1454,18 @@ function cardHtml(item) {
     ? `<img class="item-card-image" src="${escapeHtml(item.itemImage)}" alt="" loading="lazy" decoding="async" />`
     : `<span class="item-card-image placeholder">${icon('package')}</span>`;
 
+  const designs = activeVariations(item).length;
   const pills =
+    (item.archived ? `<span class="qty-pill muted-pill">Archived</span>` : '') +
     `<span class="qty-pill ${low ? 'low' : 'ok'}">${available} ${unit} avail.</span>` +
+    (designs ? `<span class="design-tag">${plural(designs, 'design', 'designs')}</span>` : '') +
     (onLoan > 0 ? `<span class="on-loan-tag">${onLoan} on loan</span>` : '') +
     (inCart > 0 ? `<span class="in-cart-tag">${icon('cart')} ${inCart} in cart</span>` : '');
 
   let cartRow;
-  if (available <= 0) {
+  if (item.archived) {
+    cartRow = `<span class="muted">Archived — open it to restore</span>`;
+  } else if (available <= 0) {
     cartRow = `<span class="muted">${onLoan > 0 ? 'All out on loan' : 'Out of stock'}</span>`;
   } else if (room <= 0) {
     cartRow = `<span class="muted">All ${available} already in your cart</span>`;
@@ -1435,6 +1486,7 @@ function cardHtml(item) {
     `<span class="item-card-body">` +
     `<span class="tag">${escapeHtml(item.category)}</span>` +
     `<span class="item-card-name">${name}</span>` +
+    (item.code ? `<span class="item-card-code">${escapeHtml(item.code)}</span>` : '') +
     `<span class="item-card-qty">${pills}</span>` +
     `</span></button>` +
     `<div class="card-cart-row">${cartRow}</div>` +
@@ -1483,16 +1535,24 @@ function renderGrid() {
     if (target) target.focus({ preventScroll: true });
   }
 
+  const pool = items.filter((i) => Boolean(i.archived) === (showArchived && isAdminUnlocked()));
   el('results-count').textContent =
-    list.length === items.length ? plural(items.length, 'item', 'items') : `${list.length} of ${plural(items.length, 'item', 'items')}`;
+    (list.length === pool.length ? plural(pool.length, 'item', 'items') : `${list.length} of ${plural(pool.length, 'item', 'items')}`) +
+    (showArchived && isAdminUnlocked() ? ' archived' : '');
+  const archivedCount = items.length - activeItems().length;
+  const toggle = el('archived-toggle');
+  toggle.hidden = !isAdminUnlocked() || (archivedCount === 0 && !showArchived);
+  toggle.textContent = showArchived ? 'Back to items in use' : `Show archived (${archivedCount})`;
 
   const empty = el('empty-state');
   empty.hidden = list.length > 0;
   if (list.length === 0) {
-    const noItems = items.length === 0;
+    const noItems = pool.length === 0;
     empty.querySelector('.state-title').textContent = noItems ? 'No items yet' : 'No items match';
     empty.querySelector('.state-text').textContent = noItems
-      ? 'Unlock Admin to add the first item to the store.'
+      ? showArchived && isAdminUnlocked()
+        ? 'Nothing is archived.'
+        : 'Unlock Admin to add the first item to the store.'
       : 'Try a different search word or category.';
     el('clear-filters-btn').hidden = noItems;
   }
@@ -1563,8 +1623,12 @@ function renderDetailStock(item, resetQty) {
   const available = availableQty(item);
   const onLoan = item.returnable ? item.quantityOnLoan || 0 : 0;
   const inCart = cartQty(item.id);
-  const room = available - inCart;
+  const room = item.archived ? 0 : available - inCart;
+  const reserved = liveBookingsFor(item.id).reduce((sum, b) => sum + bookingQty(b, item.id), 0);
 
+  el('detail-total').textContent = item.quantity;
+  el('detail-reserved-row').hidden = reserved <= 0;
+  el('detail-reserved').textContent = reserved;
   el('detail-qty').textContent = available;
   el('detail-low-stock').hidden = available > item.lowStockThreshold;
   el('detail-on-loan-row').hidden = onLoan <= 0;
@@ -1581,7 +1645,8 @@ function renderDetailStock(item, resetQty) {
     });
 
   let label = 'Add to Cart';
-  if (available <= 0) label = onLoan > 0 ? 'All out on loan' : 'Out of stock';
+  if (item.archived) label = 'Archived';
+  else if (available <= 0) label = onLoan > 0 ? 'All out on loan' : 'Out of stock';
   else if (room <= 0) label = `All ${available} in your cart`;
   else if (inCart > 0) label = `Add to Cart (${inCart} in cart)`;
   const btn = el('detail-cart-btn');
@@ -1593,11 +1658,18 @@ function renderDetail(item, { resetQty }) {
   const unit = item.unit || 'pcs';
   el('detail-category').textContent = item.category;
   el('detail-name').textContent = item.name;
+  el('detail-code').textContent = item.code || '';
+  el('detail-code').hidden = !item.code;
+  el('detail-archived').hidden = !item.archived;
+  el('detail-archive-btn').innerHTML = `${icon('package')} ${item.archived ? 'Restore' : 'Archive'}`;
+  el('detail-variations').hidden = !item.hasVariations || !(item.variations || []).length;
+  el('detail-variations').innerHTML = renderVariationChips(item);
+  if (el('detail-qr').dataset.itemId !== item.id) hideDetailQr();
   el('detail-location-text').textContent = item.locationText || 'Location not specified';
   el('detail-unit').textContent = unit;
   el('detail-unit-2').textContent = unit;
   el('detail-notes').textContent = item.notes || '';
-  el('detail-return-btn').hidden = !item.returnable;
+  el('detail-return-btn').hidden = !item.returnable || Boolean(item.archived);
   el('detail-loanable-note').hidden = !item.returnable;
   setDetailPhoto('item', item.itemImage, `Photo of ${item.name}`);
   setDetailPhoto('location', item.locationImage, `Where ${item.name} is kept`);
@@ -1614,7 +1686,10 @@ async function openDetail(itemId) {
   openModal('detail-modal');
   loadBookings().then((ok) => {
     const current = items.find((i) => i.id === itemId);
-    if (ok && current && selectedItemId === itemId && !el('detail-modal').hidden) renderDetailBookings(current);
+    if (ok && current && selectedItemId === itemId && !el('detail-modal').hidden) {
+      renderDetailBookings(current);
+      renderDetailStock(current, false);
+    }
   });
   await loadHistory(itemId, { showLoading: fresh });
 }
@@ -2114,7 +2189,7 @@ function showBookingSuccess(booking) {
   note.hidden = false;
   note.innerHTML =
     `${icon('calendar')}<span>Nothing has left the store yet. On the day, open <strong>Loans &amp; Bookings → Event Bookings</strong> and press <strong>Move out</strong>.` +
-    (booking.clashesAccepted ? ' This booking was made even though some items clash with other bookings — please agree with the other event first.' : '') +
+    (booking.clashesAccepted ? ' This booking was made over the available stock by an admin / Store Manager — make sure the other events have agreed.' : '') +
     `</span>`;
   el('success-loans-btn').textContent = 'View Bookings';
   el('success-loans-btn').dataset.tab = 'bookings';
@@ -2122,7 +2197,7 @@ function showBookingSuccess(booking) {
   openModal('success-modal');
 }
 
-function showClashes(clashes) {
+function showClashes(clashes, canOverride) {
   const box = el('booking-clashes');
   box.innerHTML =
     `<p class="clash-title">${icon('alert')}<strong>Not enough for those dates</strong></p><ul>` +
@@ -2133,7 +2208,11 @@ function showClashes(clashes) {
         return `<li><strong>${escapeHtml(c.itemName)}</strong>: you asked for ${c.wanted}, ${c.available} free${why.length ? ` — ${escapeHtml(why.join('; '))}` : ''}.</li>`;
       })
       .join('') +
-    `</ul><p>Lower the quantity or pick other dates. If you have already agreed with the other event, press <strong>Book anyway</strong>.</p>`;
+    `</ul><p>${
+      canOverride
+        ? 'Lower the quantity, remove the item or pick other dates. As an admin / Store Manager you can still press <strong>Book anyway</strong> if it has been agreed (it is logged).'
+        : 'Lower the quantity, remove the item or pick other dates. If you need more, ask an admin or Store Manager.'
+    }</p>`;
   box.hidden = false;
   box.scrollIntoView({ block: 'nearest' });
 }
@@ -2155,8 +2234,8 @@ async function submitBooking() {
   const res = await request(API.bookings, { method: 'POST', body: { ...body, acceptClashes: clashAckKey === key } });
   if (!res.ok) {
     if (res.status === 409 && res.data.code === 'clash') {
-      clashAckKey = key;
-      showClashes(res.data.clashes || []);
+      clashAckKey = res.data.canOverride ? key : null;
+      showClashes(res.data.clashes || [], Boolean(res.data.canOverride));
       renderCart();
       return;
     }
@@ -3292,6 +3371,11 @@ function openItemForm(itemId) {
   categorySelect.innerHTML = options.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
 
   el('form-name').value = item ? item.name : '';
+  el('form-code').value = item ? item.code || '' : '';
+  formVariations = item && Array.isArray(item.variations) ? item.variations.map((v) => ({ ...v })) : [];
+  el('form-has-variations').checked = Boolean(item && item.hasVariations);
+  renderVariationRows();
+  el('form-variations').hidden = !el('form-has-variations').checked;
   categorySelect.value = item ? item.category : options[0] || '';
   el('form-unit').value = item ? item.unit || 'pcs' : 'pcs';
   el('form-quantity').value = item ? item.quantity : 0;
@@ -3335,7 +3419,10 @@ el('item-form').addEventListener('submit', (e) => {
     const id = el('item-form').dataset.id;
     const body = {
       name: el('form-name').value,
+      code: el('form-code').value,
       category: el('form-category').value,
+      hasVariations: el('form-has-variations').checked,
+      variations: formVariations.map((v) => ({ id: v.id || undefined, code: v.code, name: v.name, active: v.active !== false })),
       unit: el('form-unit').value,
       quantity: Number(el('form-quantity').value),
       lowStockThreshold: Number(el('form-threshold').value),
@@ -3622,6 +3709,7 @@ function monthLabel(ym) {
 }
 
 function auditWho(entry) {
+  if (entry.via === 'system') return 'System (automatic update)';
   if (entry.via === 'password') {
     return entry.email ? `${entry.name || entry.email} (with the admin password)` : 'Someone with the admin password';
   }
@@ -3678,28 +3766,46 @@ el('audit-btn').addEventListener('click', () => requireAdminThen(openAuditModal)
 el('audit-month').addEventListener('change', (e) => loadAudit(e.target.value));
 el('audit-search').addEventListener('input', renderAudit);
 
-// ---------- Admin: who the admins are ----------
+// ---------- Admin: who the admins and Store Managers are ----------
 
 let adminRows = [];
+let managerRows = [];
 let adminYou = null;
 
+const ROLE_LISTS = {
+  admin: { rows: () => adminRows, list: 'admins-list', input: 'admin-new', label: 'admin' },
+  manager: { rows: () => managerRows, list: 'managers-list', input: 'manager-new', label: 'Store Manager' },
+};
+
+function renderRoleRows(kind) {
+  const conf = ROLE_LISTS[kind];
+  const rows = conf.rows();
+  const lastAdmin = kind === 'admin' && rows.length === 1;
+  el(conf.list).innerHTML = rows.length
+    ? rows
+        .map(
+          (email, i) =>
+            `<li class="category-row">` +
+            `<span class="admin-email">${escapeHtml(email)}${email === adminYou ? ' <span class="category-count">you</span>' : ''}</span>` +
+            `<button type="button" class="icon-btn danger-text" data-role-kind="${kind}" data-role-remove="${i}" ${lastAdmin ? 'disabled' : ''} ` +
+            `aria-label="Remove ${escapeHtml(email)}" title="${lastAdmin ? 'Keep at least one admin' : 'Remove'}">${icon('trash')}</button>` +
+            `</li>`
+        )
+        .join('')
+    : `<li class="muted-text">${kind === 'manager' ? 'No Store Managers yet.' : ''}</li>`;
+}
+
 function renderAdminRows() {
-  el('admins-list').innerHTML = adminRows
-    .map(
-      (email, i) =>
-        `<li class="category-row">` +
-        `<span class="admin-email">${escapeHtml(email)}${email === adminYou ? ' <span class="category-count">you</span>' : ''}</span>` +
-        `<button type="button" class="icon-btn danger-text" data-admin-remove="${i}" ${adminRows.length === 1 ? 'disabled' : ''} ` +
-        `aria-label="Remove ${escapeHtml(email)}" title="${adminRows.length === 1 ? 'Keep at least one admin' : 'Remove'}">${icon('trash')}</button>` +
-        `</li>`
-    )
-    .join('');
+  renderRoleRows('admin');
+  renderRoleRows('manager');
 }
 
 async function openAdminsModal() {
   setFormError('admins-form-error', '');
   el('admin-new').value = '';
+  el('manager-new').value = '';
   el('admins-list').innerHTML = '<li class="muted-text">Loading…</li>';
+  el('managers-list').innerHTML = '';
   openModal('admins-modal');
   const res = await request(`${API.admin}?action=admins`, { admin: true });
   if (!res.ok) {
@@ -3708,73 +3814,234 @@ async function openAdminsModal() {
     return;
   }
   adminRows = res.data.admins.slice();
+  managerRows = (res.data.managers || []).slice();
   adminYou = res.data.you;
   renderAdminRows();
 }
 
-function addAdminRow() {
-  const email = el('admin-new').value.trim().toLowerCase();
+// Adds what is typed in that list's box. Returns false (with a message) if it can't.
+function addRoleRow(kind) {
+  const conf = ROLE_LISTS[kind];
+  const email = el(conf.input).value.trim().toLowerCase();
+  if (!email) return true;
   if (!/^[^\s@]+@vitrox\.com$/.test(email)) {
     setFormError('admins-form-error', 'Enter a ViTrox email address (ending in @vitrox.com).');
-    return;
+    return false;
   }
-  if (adminRows.includes(email)) {
-    setFormError('admins-form-error', `${email} is already an admin.`);
-    return;
+  if (adminRows.includes(email) || managerRows.includes(email)) {
+    setFormError('admins-form-error', `${email} is already ${adminRows.includes(email) ? 'an admin' : 'a Store Manager'}.`);
+    return false;
   }
   setFormError('admins-form-error', '');
-  adminRows.push(email);
-  el('admin-new').value = '';
+  conf.rows().push(email);
+  el(conf.input).value = '';
   renderAdminRows();
+  return true;
 }
 
-el('admins-list').addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-admin-remove]');
+function addAdminRow() {
+  addRoleRow('admin');
+}
+
+el('admins-form').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-role-remove]');
   if (!btn || btn.disabled) return;
-  adminRows.splice(Number(btn.dataset.adminRemove), 1);
+  ROLE_LISTS[btn.dataset.roleKind].rows().splice(Number(btn.dataset.roleRemove), 1);
   renderAdminRows();
 });
-el('admin-add-btn').addEventListener('click', addAdminRow);
-el('admin-new').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    addAdminRow();
-  }
+el('admin-add-btn').addEventListener('click', () => addRoleRow('admin'));
+el('manager-add-btn').addEventListener('click', () => addRoleRow('manager'));
+['admin', 'manager'].forEach((kind) => {
+  el(ROLE_LISTS[kind].input).addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addRoleRow(kind);
+    }
+  });
 });
 
 el('admins-form').addEventListener('submit', (e) => {
   e.preventDefault();
   withBusy(submitButton(e.currentTarget), async () => {
     setFormError('admins-form-error', '');
-    // A typed address not yet added with the Add button still counts.
-    if (el('admin-new').value.trim()) {
-      addAdminRow();
-      if (!el('admins-form-error').hidden) return;
-    }
-    if (adminYou && !adminRows.includes(adminYou)) {
+    // Addresses typed but not yet added with the Add buttons still count.
+    if (!addRoleRow('admin') || !addRoleRow('manager')) return;
+    if (adminYou && !adminRows.includes(adminYou) && !managerRows.includes(adminYou)) {
       const ok = await confirmDialog({
         title: 'Remove yourself as admin?',
-        message: 'Your ViTrox account will no longer unlock admin tools. You can still get in with the admin password.',
+        message: 'Your ViTrox account will no longer unlock the admin tools. You can still get in with the admin password.',
         confirmLabel: 'Remove me',
       });
       if (!ok) return;
     }
-    const res = await request(`${API.admin}?action=admins`, { method: 'POST', admin: true, body: { admins: adminRows } });
+    const res = await request(`${API.admin}?action=admins`, { method: 'POST', admin: true, body: { admins: adminRows, managers: managerRows } });
     if (!res.ok) {
       setFormError('admins-form-error', res.error);
       return;
     }
     closeModal('admins-modal');
-    showToast('Admins saved.', 'success');
-    // Picks up whether this account is still an admin.
+    showToast('Admins and Store Managers saved.', 'success');
+    // Picks up this account's own role straight away.
     if (session && res.data.you) {
-      const stillAdmin = res.data.admins.includes(res.data.you);
-      if (stillAdmin !== Boolean(session.user.isAdmin)) setSession({ token: session.token, user: { ...session.user, isAdmin: stillAdmin } });
+      const role = res.data.admins.includes(res.data.you) ? 'admin' : (res.data.managers || []).includes(res.data.you) ? 'manager' : null;
+      if (role !== (session.user.role || null) || Boolean(role) !== Boolean(session.user.isAdmin)) {
+        setSession({ token: session.token, user: { ...session.user, role, isAdmin: Boolean(role) } });
+      }
     }
   });
 });
 
 el('manage-admins-btn').addEventListener('click', () => requireAdminThen(openAdminsModal));
+
+// ---------- Design variations, on-screen QR, archive ----------
+
+function renderVariationChips(item) {
+  const all = Array.isArray(item.variations) ? item.variations : [];
+  const shown = isAdminUnlocked() ? all : all.filter((v) => v.active);
+  if (!item.hasVariations || shown.length === 0) return '';
+  return (
+    `<p class="detail-variations-title"><strong>Design variations</strong> <span class="muted-text">— all share the ${item.quantity} ${escapeHtml(item.unit || 'pcs')} above</span></p>` +
+    `<ul class="variation-chips">` +
+    shown
+      .map(
+        (v) =>
+          `<li class="variation-chip${v.active ? '' : ' is-inactive'}"><span class="variation-code">${escapeHtml(v.code)}</span> ${escapeHtml(v.name)}` +
+          `${v.active ? '' : ' <span class="muted-text">(inactive)</span>'}</li>`
+      )
+      .join('') +
+    `</ul>`
+  );
+}
+
+function hideDetailQr() {
+  const box = el('detail-qr');
+  box.hidden = true;
+  box.innerHTML = '';
+  box.dataset.itemId = '';
+  el('detail-qr-btn').setAttribute('aria-expanded', 'false');
+}
+
+// Anyone can show an item's QR code on screen, e.g. to scan it with another phone.
+el('detail-qr-btn').addEventListener('click', async () => {
+  const box = el('detail-qr');
+  if (!box.hidden) {
+    hideDetailQr();
+    return;
+  }
+  const item = items.find((i) => i.id === selectedItemId);
+  if (!item) return;
+  try {
+    await loadQrLib();
+  } catch (err) {
+    showToast(err.message, 'error');
+    return;
+  }
+  const url = itemLabelUrl(item);
+  box.innerHTML =
+    `<div class="detail-qr-code">${qrSvg(url)}</div>` +
+    `<div class="detail-qr-text"><strong>${escapeHtml(item.name)}</strong>${item.code ? ` <span class="item-code">${escapeHtml(item.code)}</span>` : ''}` +
+    `<p class="muted-text">Scan with a phone camera to open this item in the store.</p>` +
+    `<button type="button" class="link-btn" id="detail-qr-copy">Copy link</button></div>`;
+  box.dataset.itemId = item.id;
+  box.hidden = false;
+  el('detail-qr-btn').setAttribute('aria-expanded', 'true');
+});
+
+el('detail-qr').addEventListener('click', async (e) => {
+  if (!e.target.closest('#detail-qr-copy')) return;
+  const item = items.find((i) => i.id === selectedItemId);
+  if (!item) return;
+  try {
+    await navigator.clipboard.writeText(itemLabelUrl(item));
+    showToast('Link copied.', 'success');
+  } catch {
+    showToast(itemLabelUrl(item), '', 8000);
+  }
+});
+
+el('detail-archive-btn').addEventListener('click', () => {
+  requireAdminThen(async () => {
+    const item = items.find((i) => i.id === selectedItemId);
+    if (!item) return;
+    const archiving = !item.archived;
+    const ok = await confirmDialog(
+      archiving
+        ? {
+            title: `Archive “${item.name}”?`,
+            message:
+              'It disappears from the store and can no longer be moved out or booked, but its history stays. You can restore it any time (Show archived, next to the item count).',
+            confirmLabel: 'Archive item',
+          }
+        : { title: `Restore “${item.name}”?`, message: 'It comes back into the store for moving out and booking.', confirmLabel: 'Restore item', danger: false }
+    );
+    if (!ok) return;
+    const res = await request(`${API.items}?id=${encodeURIComponent(item.id)}`, { method: 'PUT', admin: true, body: { archived: archiving } });
+    if (!res.ok) {
+      showToast(res.error, 'error', 8000);
+      return;
+    }
+    showToast(archiving ? `“${item.name}” archived.` : `“${item.name}” restored.`, 'success');
+    if (archiving) closeModal('detail-modal');
+    await loadItems({ silent: true });
+  });
+});
+
+el('archived-toggle').addEventListener('click', () => {
+  showArchived = !showArchived;
+  activeCategory = 'All';
+  renderCategoryChips();
+  renderGrid();
+});
+
+// ----- Variations editor in the item form -----
+
+let formVariations = [];
+
+function renderVariationRows() {
+  el('form-variation-list').innerHTML = formVariations
+    .map(
+      (v, i) =>
+        `<li class="variation-row">` +
+        `<input type="text" maxlength="20" value="${escapeHtml(v.code)}" data-var-field="code" data-var-index="${i}" aria-label="Variation code" placeholder="ENG" />` +
+        `<input type="text" maxlength="60" value="${escapeHtml(v.name)}" data-var-field="name" data-var-index="${i}" aria-label="Variation name" placeholder="Engineering Programme" />` +
+        `<label class="variation-active" title="Active"><input type="checkbox" data-var-field="active" data-var-index="${i}"${v.active ? ' checked' : ''} /> <span class="sr-only">Active</span></label>` +
+        `<button type="button" class="icon-btn danger-text" data-var-remove="${i}" aria-label="Remove this variation" title="Remove">${icon('trash')}</button>` +
+        `</li>`
+    )
+    .join('');
+}
+
+function syncVariationsVisible() {
+  const on = el('form-has-variations').checked;
+  el('form-variations').hidden = !on;
+  if (on && formVariations.length === 0) {
+    formVariations.push({ id: null, code: '', name: '', active: true });
+    renderVariationRows();
+  }
+}
+
+el('form-has-variations').addEventListener('change', syncVariationsVisible);
+el('form-variation-add').addEventListener('click', () => {
+  formVariations.push({ id: null, code: '', name: '', active: true });
+  renderVariationRows();
+  const inputs = el('form-variation-list').querySelectorAll('[data-var-field="code"]');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+el('form-variation-list').addEventListener('input', (e) => {
+  const i = e.target.dataset.varIndex;
+  if (i === undefined) return;
+  const field = e.target.dataset.varField;
+  formVariations[Number(i)][field] = field === 'active' ? e.target.checked : e.target.value;
+});
+el('form-variation-list').addEventListener('change', (e) => {
+  if (e.target.dataset.varField === 'active') formVariations[Number(e.target.dataset.varIndex)].active = e.target.checked;
+});
+el('form-variation-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-var-remove]');
+  if (!btn) return;
+  formVariations.splice(Number(btn.dataset.varRemove), 1);
+  renderVariationRows();
+});
 
 // ---------- QR labels ----------
 //
@@ -3830,7 +4097,7 @@ function qrSvg(text) {
 // Distinct storage locations (as typed on items), with how many items each has.
 function storageLocations() {
   const byKey = new Map();
-  items.forEach((item) => {
+  activeItems().forEach((item) => {
     const loc = String(item.locationText || '').trim().replace(/\s+/g, ' ');
     if (!loc) return;
     const key = loc.toLowerCase();
@@ -3851,15 +4118,18 @@ function labelChoices(kind) {
       search: loc,
     }));
   }
-  return items
-    .slice()
+  return activeItems()
     .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
     .map((item) => ({
       key: `item:${item.id}`,
       title: item.name,
-      subs: [item.category, item.locationText ? `Location: ${item.locationText}` : ''].filter(Boolean),
+      subs: [
+        [item.code, item.category].filter(Boolean).join(' · '),
+        activeVariations(item).length ? `${plural(activeVariations(item).length, 'design', 'designs')}` : '',
+        item.locationText ? `Location: ${item.locationText}` : '',
+      ].filter(Boolean),
       url: itemLabelUrl(item),
-      search: `${item.name} ${item.category} ${item.locationText || ''}`,
+      search: `${item.name} ${item.code || ''} ${item.category} ${item.locationText || ''}`,
     }));
 }
 
@@ -3944,7 +4214,7 @@ function openLabelsModal(options = {}) {
   el('labels-filter').value = '';
   el('labels-copies').value = '1';
   setFormError('labels-form-error', '');
-  const startWith = options.itemIds ? options.itemIds : items.map((i) => i.id);
+  const startWith = options.itemIds ? options.itemIds : activeItems().map((i) => i.id);
   startWith.forEach((id) => labelPicks.add(`item:${id}`));
   openModal('labels-modal');
   renderLabelList();
@@ -4104,17 +4374,21 @@ function downloadCsv(filename, rows) {
 el('export-items-btn').addEventListener('click', () => {
   if (!itemsLoaded) return;
   const rows = [
-    ['Name', 'Category', 'Total Quantity', 'On Loan', 'Available', 'Unit', 'Low Stock Threshold', 'Returnable', 'Location'],
+    ['Item Code', 'Name', 'Category', 'Total Quantity', 'On Loan', 'Reserved', 'Available', 'Unit', 'Low Stock Threshold', 'Returnable', 'Location', 'Design Variations', 'Status'],
     ...items.map((i) => [
+      i.code || '',
       i.name,
       i.category,
       i.quantity,
       i.quantityOnLoan || 0,
+      liveBookingsFor(i.id).reduce((sum, b) => sum + bookingQty(b, i.id), 0),
       availableQty(i),
       i.unit,
       i.lowStockThreshold,
       i.returnable ? 'Yes' : 'No',
       i.locationText,
+      i.hasVariations ? (i.variations || []).filter((v) => v.active).map((v) => `${v.code} ${v.name}`).join('; ') : '',
+      i.archived ? 'Archived' : 'In use',
     ]),
   ];
   downloadCsv(`vitrox-store-inventory-${todayStr()}.csv`, rows);

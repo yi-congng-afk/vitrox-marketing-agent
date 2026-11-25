@@ -124,50 +124,88 @@ function deny(code, error) {
   return json(401, { error, code });
 }
 
-// ---- Admins ----
+// ---- Admins and Store Managers ----
 //
-// An admin is either someone signed in with a ViTrox account on the admin list,
-// or anyone holding the admin password (kept as a back door, so a Google
-// problem can never lock the store's owner out).
+// Roles come from a list of ViTrox emails kept with the store's data:
+//   admin   — everything, including who the admins are and store settings
+//   manager — "Store Manager": inventory, all bookings, checkouts and returns,
+//             stock adjustments and reports (not people or settings)
+// Anyone holding the admin password counts as an admin (kept as a back door,
+// so a Google problem can never lock the store's owner out).
 
 // Used until the list has been edited from the store's Admins window.
 const DEFAULT_ADMINS = ['yi-cong.ng@vitrox.com'];
 const MAX_ADMINS = 10;
+const MAX_MANAGERS = 30;
 const ADMIN_EMAIL_RE = new RegExp(`^[a-z0-9._%+-]+@(${ALLOWED_DOMAINS.map((d) => d.replace(/\./g, '\\.')).join('|')})$`);
 
-let cachedAdmins = null;
-let adminsAt = 0;
+let cachedRoles = null;
+let rolesAt = 0;
 
-async function loadAdmins({ fresh = false } = {}) {
-  if (!fresh && cachedAdmins && Date.now() - adminsAt < CONFIG_TTL_MS) return cachedAdmins;
-  const saved = await getAdminList();
-  const emails = saved && Array.isArray(saved.emails) ? saved.emails.filter((e) => typeof e === 'string' && e) : [];
-  cachedAdmins = emails.length ? emails : DEFAULT_ADMINS.slice();
-  adminsAt = Date.now();
-  return cachedAdmins;
+const emailList = (value) => (Array.isArray(value) ? value.filter((e) => typeof e === 'string' && e).map((e) => e.toLowerCase()) : []);
+
+async function loadRoles({ fresh = false } = {}) {
+  if (!fresh && cachedRoles && Date.now() - rolesAt < CONFIG_TTL_MS) return cachedRoles;
+  const saved = (await getAdminList()) || {};
+  const admins = emailList(saved.emails);
+  const finalAdmins = admins.length ? admins : DEFAULT_ADMINS.slice();
+  cachedRoles = { admins: finalAdmins, managers: emailList(saved.managers).filter((e) => !finalAdmins.includes(e)) };
+  rolesAt = Date.now();
+  return cachedRoles;
 }
 
-// Checks and saves a new admin list. Returns { ok, admins } or { ok: false, error }.
-async function saveAdmins(list) {
+async function loadAdmins(options) {
+  return (await loadRoles(options)).admins;
+}
+
+function cleanEmails(list, label) {
   const emails = [];
   for (const raw of Array.isArray(list) ? list : []) {
     const email = clean(raw).toLowerCase();
     if (!email) continue;
     if (!ADMIN_EMAIL_RE.test(email)) {
-      return { ok: false, error: `"${email.slice(0, 60)}" is not a ViTrox email (it must end in @${ALLOWED_DOMAINS[0]})` };
+      return { error: `${label}: "${email.slice(0, 60)}" is not a ViTrox email (it must end in @${ALLOWED_DOMAINS[0]})` };
     }
     if (!emails.includes(email)) emails.push(email);
   }
-  if (emails.length === 0) return { ok: false, error: 'Keep at least one admin' };
-  if (emails.length > MAX_ADMINS) return { ok: false, error: `${MAX_ADMINS} admins at most` };
-  await saveAdminList({ emails, updatedAt: new Date().toISOString() });
-  cachedAdmins = emails;
-  adminsAt = Date.now();
-  return { ok: true, admins: emails };
+  return { emails };
+}
+
+// Checks and saves both lists. Returns { ok, admins, managers } or { ok: false, error }.
+async function saveRoles({ admins, managers }) {
+  const a = cleanEmails(admins, 'Admins');
+  if (a.error) return { ok: false, error: a.error };
+  const m = cleanEmails(managers, 'Store Managers');
+  if (m.error) return { ok: false, error: m.error };
+  if (a.emails.length === 0) return { ok: false, error: 'Keep at least one admin' };
+  if (a.emails.length > MAX_ADMINS) return { ok: false, error: `${MAX_ADMINS} admins at most` };
+  if (m.emails.length > MAX_MANAGERS) return { ok: false, error: `${MAX_MANAGERS} Store Managers at most` };
+  const both = m.emails.find((e) => a.emails.includes(e));
+  if (both) return { ok: false, error: `${both} is listed as both admin and Store Manager — keep one` };
+  await saveAdminList({ emails: a.emails, managers: m.emails, updatedAt: new Date().toISOString() });
+  cachedRoles = { admins: a.emails, managers: m.emails };
+  rolesAt = Date.now();
+  return { ok: true, admins: a.emails, managers: m.emails };
+}
+
+// Older callers: replace only the admin list.
+async function saveAdmins(list) {
+  const current = await loadRoles({ fresh: true });
+  return saveRoles({ admins: list, managers: current.managers.filter((e) => !(Array.isArray(list) ? list : []).map((x) => clean(x).toLowerCase()).includes(e)) });
+}
+
+// 'admin' | 'manager' | null
+async function roleOf(email) {
+  if (!email) return null;
+  const e = String(email).toLowerCase();
+  const roles = await loadRoles();
+  if (roles.admins.includes(e)) return 'admin';
+  if (roles.managers.includes(e)) return 'manager';
+  return null;
 }
 
 async function isAdminEmail(email) {
-  return Boolean(email) && (await loadAdmins()).includes(String(email).toLowerCase());
+  return (await roleOf(email)) === 'admin';
 }
 
 function passwordOk(event) {
@@ -180,24 +218,34 @@ function passwordOk(event) {
   return crypto.timingSafeEqual(a, b);
 }
 
-// Who is acting as admin on this request, or null:
-//   { email, name, via: 'account' | 'password' }
+// Who is using admin / manager tools on this request, or null:
+//   { email, name, via: 'account' | 'password', role: 'admin' | 'manager' }
 // Remembered on the event, so the activity log knows who made a change.
 async function adminFor(event) {
   if (event.__adminChecked) return event.__admin;
   const user = await readSession(event);
   let actor = null;
-  if (user && (await isAdminEmail(user.email))) {
-    actor = { email: user.email, name: user.name, via: 'account' };
+  const role = user ? await roleOf(user.email) : null;
+  if (role === 'admin') {
+    actor = { email: user.email, name: user.name, via: 'account', role };
   } else if (passwordOk(event)) {
-    actor = user ? { email: user.email, name: user.name, via: 'password' } : { email: '', name: '', via: 'password' };
+    actor = user ? { email: user.email, name: user.name, via: 'password', role: 'admin' } : { email: '', name: '', via: 'password', role: 'admin' };
+  } else if (role === 'manager') {
+    actor = { email: user.email, name: user.name, via: 'account', role };
   }
   event.__adminChecked = true;
   event.__admin = actor;
   return actor;
 }
 
+// Full admin (people, settings, categories, housekeeping).
 async function isAdmin(event) {
+  const actor = await adminFor(event);
+  return Boolean(actor && actor.role === 'admin');
+}
+
+// Admin or Store Manager (inventory, bookings, loans, stock, reports).
+async function isManager(event) {
   return Boolean(await adminFor(event));
 }
 
@@ -205,6 +253,11 @@ async function isAdmin(event) {
 async function requireAdmin(event) {
   if (await isAdmin(event)) return null;
   return json(401, { error: 'Admin access required', code: 'admin_required' });
+}
+
+async function requireManager(event) {
+  if (await isManager(event)) return null;
+  return json(401, { error: 'Admin or Store Manager access required', code: 'admin_required' });
 }
 
 const SESSION_EXPIRED = () => deny('session_expired', 'Your sign-in has expired — please sign in again.');
@@ -218,7 +271,7 @@ const SESSION_EXPIRED = () => deny('session_expired', 'Your sign-in has expired 
 async function checkAccess(event) {
   const user = await readSession(event);
   if (sessionToken(event) && !user) return { response: SESSION_EXPIRED() };
-  const admin = await isAdmin(event);
+  const admin = await isManager(event);
 
   const config = await loadConfig();
   if (config.requireSignIn && !user && !admin) {
@@ -317,9 +370,14 @@ module.exports = {
   validEmployeeNo,
   verifyGoogleCredential,
   loadAdmins,
+  loadRoles,
   saveAdmins,
+  saveRoles,
+  roleOf,
   isAdminEmail,
   adminFor,
   isAdmin,
+  isManager,
   requireAdmin,
+  requireManager,
 };

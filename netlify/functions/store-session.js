@@ -13,20 +13,21 @@ const {
   writeProfile,
   validEmployeeNo,
   verifyGoogleCredential,
-  isAdminEmail,
+  roleOf,
 } = require('./_shared/store-access');
 const { audit } = require('./_shared/audit');
 
-// isAdmin only decides which buttons the page shows; every admin action is
-// checked again on the server.
+// role / isAdmin only decide which buttons the page shows; every admin or
+// manager action is checked again on the server.
+//   role: 'admin' | 'manager' | null;  isAdmin: may switch on the admin tools
 async function publicUser(user) {
-  let isAdmin = false;
+  let role = null;
   try {
-    isAdmin = await isAdminEmail(user.email);
+    role = await roleOf(user.email);
   } catch {
-    // Admin tools stay hidden; the admin password still works.
+    // Tools stay hidden; the admin password still works.
   }
-  return { email: user.email, name: user.name, employeeNo: user.employeeNo || '', expiresAt: user.exp, isAdmin };
+  return { email: user.email, name: user.name, employeeNo: user.employeeNo || '', expiresAt: user.exp, isAdmin: Boolean(role), role };
 }
 
 function parseBody(event) {

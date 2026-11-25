@@ -1,4 +1,4 @@
-const { requireAdmin } = require('./_shared/store-auth');
+const { requireManager } = require('./_shared/store-auth');
 const { getItems, saveItems, getLoans, saveLoans, getReminderLog, genId } = require('./_shared/store-blobs');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
 const { runReminders, REMIND_EVERY_DAYS } = require('./_shared/reminders');
@@ -29,7 +29,7 @@ exports.handler = async (event) => {
   // Overdue reminder emails (admin only): GET ?view=reminders shows the last
   // run, POST ?action=remind runs it now (same rules as the daily run).
   if (params.view === 'reminders' || params.action === 'remind') {
-    const adminError = await requireAdmin(event);
+    const adminError = await requireManager(event);
     if (adminError) return adminError;
     if (method === 'GET' && params.view === 'reminders') {
       const log = await getReminderLog();
@@ -83,6 +83,7 @@ exports.handler = async (event) => {
     const items = await getItems();
     const item = items.find((i) => i.id === itemId);
     if (!item) return { statusCode: 404, body: JSON.stringify({ error: 'Item not found' }) };
+    if (item.archived) return { statusCode: 400, body: JSON.stringify({ error: `"${item.name}" has been archived` }) };
     if (!item.returnable) {
       return { statusCode: 400, body: JSON.stringify({ error: `"${item.name}" is not marked as returnable/loanable equipment` }) };
     }
@@ -198,7 +199,7 @@ exports.handler = async (event) => {
   // Admin correction of a loan record: who, what for, when due, how many out
   // and how many back. The item's "on loan" count follows the change.
   if (method === 'PUT') {
-    const adminError = await requireAdmin(event);
+    const adminError = await requireManager(event);
     if (adminError) return adminError;
     if (!params.id) return json(400, { error: 'Missing id query parameter' });
 
@@ -271,7 +272,7 @@ exports.handler = async (event) => {
   }
 
   if (method === 'DELETE') {
-    const adminError = await requireAdmin(event);
+    const adminError = await requireManager(event);
     if (adminError) return adminError;
 
     const id = event.queryStringParameters && event.queryStringParameters.id;

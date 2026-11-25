@@ -1,5 +1,5 @@
-const { requireAdmin } = require('./_shared/store-auth');
-const { checkAccess, loadAdmins, saveAdmins } = require('./_shared/store-access');
+const { requireAdmin, requireManager } = require('./_shared/store-auth');
+const { checkAccess, loadRoles, saveRoles } = require('./_shared/store-access');
 const { audit, malaysiaMonth } = require('./_shared/audit');
 const {
   getAuditMonth,
@@ -24,20 +24,26 @@ function json(statusCode, payload, extraHeaders) {
 //   GET  ?action=backup   -> everything (except photo files) as one JSON download
 //   POST ?action=cleanup  -> remove finished history older than a date; stock
 //        { before: 'YYYY-MM-DD', activity, loans, reports, dryRun }  is never changed
-//   GET  ?action=admins   -> { admins, you }
-//   POST ?action=admins   -> { admins: [emails] } replaces the admin list
+//   GET  ?action=admins   -> { admins, managers, you }
+//   POST ?action=admins   -> { admins: [emails], managers?: [emails] } replaces the lists
 //   GET  ?action=log[&month=YYYY-MM] -> admin activity for one month, newest first
 exports.handler = async (event) => {
   const access = await checkAccess(event);
   if (access.response) return access.response;
-  const adminError = await requireAdmin(event);
-  if (adminError) return adminError;
+  // Store Managers may read the activity log; everything else here is admin only.
+  const managerError = await requireManager(event);
+  if (managerError) return managerError;
 
   const params = event.queryStringParameters || {};
   const action = params.action;
+  if (!(event.httpMethod === 'GET' && action === 'log')) {
+    const adminError = await requireAdmin(event);
+    if (adminError) return adminError;
+  }
 
   if (event.httpMethod === 'GET' && action === 'admins') {
-    return json(200, { admins: await loadAdmins({ fresh: true }), you: access.user ? access.user.email : null });
+    const roles = await loadRoles({ fresh: true });
+    return json(200, { admins: roles.admins, managers: roles.managers, you: access.user ? access.user.email : null });
   }
 
   if (event.httpMethod === 'POST' && action === 'admins') {
@@ -47,16 +53,20 @@ exports.handler = async (event) => {
     } catch {
       return json(400, { error: 'Invalid request body' });
     }
-    const before = await loadAdmins({ fresh: true });
-    const result = await saveAdmins(body.admins);
+    const before = await loadRoles({ fresh: true });
+    const result = await saveRoles({ admins: body.admins, managers: body.managers !== undefined ? body.managers : before.managers });
     if (!result.ok) return json(400, { error: result.error });
-    const added = result.admins.filter((e) => !before.includes(e));
-    const removed = before.filter((e) => !result.admins.includes(e));
-    const parts = [];
-    if (added.length) parts.push(`added ${added.join(', ')}`);
-    if (removed.length) parts.push(`removed ${removed.join(', ')}`);
-    if (parts.length) await audit(event, 'admins', `Admins: ${parts.join('; ')}`);
-    return json(200, { admins: result.admins, you: access.user ? access.user.email : null });
+    const diff = (label, was, now) => {
+      const parts = [];
+      const added = now.filter((e) => !was.includes(e));
+      const removed = was.filter((e) => !now.includes(e));
+      if (added.length) parts.push(`added ${added.join(', ')}`);
+      if (removed.length) parts.push(`removed ${removed.join(', ')}`);
+      return parts.length ? `${label}: ${parts.join('; ')}` : '';
+    };
+    const summary = [diff('Admins', before.admins, result.admins), diff('Store Managers', before.managers, result.managers)].filter(Boolean).join('. ');
+    if (summary) await audit(event, 'admins', summary);
+    return json(200, { admins: result.admins, managers: result.managers, you: access.user ? access.user.email : null });
   }
 
   if (event.httpMethod === 'GET' && action === 'log') {

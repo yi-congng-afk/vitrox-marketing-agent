@@ -11,7 +11,7 @@ const {
 } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
-const { requireAdmin } = require('./_shared/store-auth');
+const { requireManager } = require('./_shared/store-auth');
 const { audit } = require('./_shared/audit');
 
 function json(statusCode, payload) {
@@ -67,7 +67,7 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'DELETE') {
     const access = await checkAccess(event);
     if (access.response) return access.response;
-    const adminError = await requireAdmin(event);
+    const adminError = await requireManager(event);
     if (adminError) return adminError;
     const id = event.queryStringParameters && event.queryStringParameters.id;
     if (!id) return json(400, { error: 'Missing id query parameter' });
@@ -119,6 +119,10 @@ exports.handler = async (event) => {
     const item = items.find((i) => i.id === itemId);
     if (!item) {
       problems.push('An item in your cart no longer exists — remove it and try again');
+      continue;
+    }
+    if (item.archived) {
+      problems.push(`"${item.name}" has been archived and can no longer be moved out`);
       continue;
     }
     const available = item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity;

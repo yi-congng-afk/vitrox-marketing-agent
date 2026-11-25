@@ -1,4 +1,4 @@
-const { requireAdmin } = require('./_shared/store-auth');
+const { requireAdmin, requireManager } = require('./_shared/store-auth');
 const {
   getItems,
   getCategories,
@@ -13,10 +13,14 @@ const {
 } = require('./_shared/store-blobs');
 const { checkAccess } = require('./_shared/store-access');
 const { audit, describeChanges } = require('./_shared/audit');
+const { getBookings } = require('./_shared/store-blobs');
+const { cleanCode, cleanVariations, describeVariationChanges, runCategoryMigrationOnce } = require('./_shared/inventory');
+const { isLive } = require('./_shared/bookings');
 
 const REQUIRED_FIELDS = ['name', 'category'];
 const ITEM_FIELDS = [
   ['name', 'name'],
+  ['code', 'item code'],
   ['category', 'category'],
   ['unit', 'unit'],
   ['quantity', 'total', 'number'],
@@ -26,6 +30,7 @@ const ITEM_FIELDS = [
   ['notes', 'notes'],
   ['itemImage', 'photo', 'photo'],
   ['locationImage', 'location photo', 'photo'],
+  ['hasVariations', 'has variations'],
 ];
 const MAX_CATEGORY_LENGTH = 60;
 
@@ -140,6 +145,11 @@ exports.handler = async (event) => {
   if (access.response) return access.response;
 
   if (method === 'GET') {
+    try {
+      await runCategoryMigrationOnce(audit);
+    } catch {
+      // Tried again on the next load; the list still works meanwhile.
+    }
     let items = await getItems();
     try {
       items = await migrateInlineImages(items);
@@ -153,10 +163,9 @@ exports.handler = async (event) => {
     };
   }
 
-  const adminError = await requireAdmin(event);
-  if (adminError) return adminError;
-
   if (method === 'POST' && event.queryStringParameters && event.queryStringParameters.action === 'categories') {
+    const adminError = await requireAdmin(event);
+    if (adminError) return adminError;
     let body;
     try {
       body = JSON.parse(event.body || '{}') || {};
@@ -165,6 +174,9 @@ exports.handler = async (event) => {
     }
     return updateCategories(body, event);
   }
+
+  const managerError = await requireManager(event);
+  if (managerError) return managerError;
 
   if (method === 'POST') {
     let body;
@@ -181,6 +193,12 @@ exports.handler = async (event) => {
 
     const items = await getItems();
     const now = new Date().toISOString();
+    const codeResult = cleanCode(body.code, body.category, items, null);
+    if (codeResult.error) return json(400, { error: codeResult.error });
+    const varResult = cleanVariations(Array.isArray(body.variations) ? body.variations : [], []);
+    if (varResult.error) return json(400, { error: varResult.error });
+    const hasVariations = body.hasVariations === true;
+    if (hasVariations && !varResult.variations.length) return json(400, { error: 'Add at least one design variation, or untick "Has design variations"' });
     const newItem = {
       id: genId('itm'),
       name: '',
@@ -200,6 +218,10 @@ exports.handler = async (event) => {
     };
     newItem.createdAt = now;
     newItem.updatedAt = now;
+    newItem.code = codeResult.code;
+    newItem.hasVariations = hasVariations;
+    newItem.variations = varResult.variations;
+    newItem.archived = false;
     try {
       await applyImages(body, newItem, null);
     } catch (err) {
@@ -208,7 +230,12 @@ exports.handler = async (event) => {
 
     items.push(newItem);
     await saveItems(items);
-    await audit(event, 'item.add', `Added item "${newItem.name}" (${newItem.category}, ${newItem.quantity} ${newItem.unit})`);
+    await audit(
+      event,
+      'item.add',
+      `Added item "${newItem.name}" ${newItem.code} (${newItem.category}, ${newItem.quantity} ${newItem.unit})` +
+        (newItem.hasVariations ? ` with variations ${newItem.variations.map((v) => `"${v.name}"`).join(', ')}` : '')
+    );
 
     return { statusCode: 201, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: newItem }) };
   }
@@ -229,6 +256,36 @@ exports.handler = async (event) => {
     if (index === -1) return { statusCode: 404, body: JSON.stringify({ error: 'Item not found' }) };
 
     const updated = sanitizeItem(body, items[index]);
+    if (body.code !== undefined || !updated.code) {
+      const codeResult = cleanCode(body.code !== undefined ? body.code : '', updated.category, items, id);
+      if (codeResult.error) return json(400, { error: codeResult.error });
+      updated.code = codeResult.code;
+    }
+    if (body.variations !== undefined) {
+      const varResult = cleanVariations(body.variations, items[index].variations);
+      if (varResult.error) return json(400, { error: varResult.error });
+      updated.variations = varResult.variations;
+    }
+    if (!Array.isArray(updated.variations)) updated.variations = [];
+    if (typeof body.hasVariations === 'boolean') updated.hasVariations = body.hasVariations;
+    if (updated.hasVariations && !updated.variations.some((v) => v.active)) {
+      return json(400, { error: 'Keep at least one active design variation, or untick "Has design variations"' });
+    }
+    if (typeof body.archived === 'boolean' && body.archived !== Boolean(items[index].archived)) {
+      if (body.archived) {
+        if ((items[index].quantityOnLoan || 0) > 0) {
+          return json(400, { error: `${items[index].quantityOnLoan} of "${items[index].name}" are still out on loan — get them returned before archiving` });
+        }
+        const bookings = await getBookings();
+        const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+        const live = bookings.filter((b) => isLive(b, today) && (b.lines || []).some((l) => l.itemId === id));
+        if (live.length) {
+          return json(400, { error: `"${items[index].name}" is booked for ${live.map((b) => `"${b.event}"`).join(', ')} — cancel or move those bookings first` });
+        }
+      }
+      updated.archived = body.archived;
+      updated.archivedAt = body.archived ? new Date().toISOString() : null;
+    }
     if (updated.quantity < (items[index].quantityOnLoan || 0)) {
       return json(400, {
         error: `${items[index].quantityOnLoan} of "${items[index].name}" are out on loan, so the total can't be set below ${items[index].quantityOnLoan}`,
@@ -245,7 +302,10 @@ exports.handler = async (event) => {
     items[index] = updated;
     await saveItems(items);
     await Promise.all(replacedImages.map(deleteImage));
-    const changes = describeChanges(before, updated, ITEM_FIELDS);
+    if (Boolean(before.archived) !== Boolean(updated.archived)) {
+      await audit(event, updated.archived ? 'item.archive' : 'item.restore', `${updated.archived ? 'Archived' : 'Restored'} item "${updated.name}" ${updated.code || ''}`.trim());
+    }
+    const changes = [describeChanges(before, updated, ITEM_FIELDS), describeVariationChanges(before.variations, updated.variations)].filter(Boolean).join(', ');
     if (changes) await audit(event, 'item.edit', `Edited "${before.name}": ${changes}`);
 
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: updated }) };

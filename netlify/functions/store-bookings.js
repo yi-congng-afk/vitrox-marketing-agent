@@ -1,5 +1,5 @@
 const { getItems, getLoans, getBookings, saveBookings, genId } = require('./_shared/store-blobs');
-const { checkAccess, recordedBy, isAdmin } = require('./_shared/store-access');
+const { checkAccess, recordedBy, isManager } = require('./_shared/store-access');
 const { audit } = require('./_shared/audit');
 const { MAX_DAYS, MAX_AHEAD_DAYS, malaysiaToday, validDate, daysBetween, findClashes } = require('./_shared/bookings');
 
@@ -80,14 +80,26 @@ exports.handler = async (event) => {
         problems.push('An item in your list no longer exists — remove it and try again');
         continue;
       }
+      if (item.archived) {
+        problems.push(`"${item.name}" has been archived and can no longer be booked`);
+        continue;
+      }
       if (quantity > item.quantity) problems.push(`"${item.name}": the store only has ${item.quantity} in total`);
       lines.push({ itemId, itemName: item.name, quantity, returnable: Boolean(item.returnable) });
     }
     if (problems.length) return json(400, { error: problems.join('; ') });
 
     const clashes = findClashes(lines, { start, end, items, bookings, loans, today });
-    if (clashes.length && body.acceptClashes !== true) {
-      return json(409, { code: 'clash', error: 'Some items are already booked or out on loan for those dates', clashes });
+    // Over-booking is refused. Only an admin or Store Manager may knowingly
+    // override it (logged), e.g. when the other event has agreed to share.
+    const canOverride = await isManager(event);
+    if (clashes.length && !(canOverride && body.acceptClashes === true)) {
+      return json(409, {
+        code: 'clash',
+        error: 'Not enough available for those dates — lower the quantity, remove the item or pick other dates',
+        clashes,
+        canOverride,
+      });
     }
 
     const booking = {
@@ -106,6 +118,13 @@ exports.handler = async (event) => {
     const latest = await getBookings();
     latest.push(booking);
     await saveBookings(latest);
+    if (clashes.length) {
+      await audit(
+        event,
+        'booking.override',
+        `Booked ${describe(booking)} over the available stock: ${clashes.map((c) => `"${c.itemName}" ${c.wanted} wanted, ${c.available} free`).join('; ')}`
+      );
+    }
     return json(201, { booking, clashes });
   }
 
@@ -115,7 +134,7 @@ exports.handler = async (event) => {
     const booking = bookings.find((b) => b.id === params.id);
     if (!booking) return json(404, { error: 'That booking no longer exists' });
 
-    const admin = await isAdmin(event);
+    const admin = await isManager(event);
     if (method === 'DELETE') {
       if (!admin) return json(401, { error: 'Admin access required', code: 'admin_required' });
       await saveBookings(bookings.filter((b) => b !== booking));

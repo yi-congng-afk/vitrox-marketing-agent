@@ -1,13 +1,7 @@
 const { getStore } = require('@netlify/blobs');
 
-const CATEGORIES = [
-  'Marketing Materials',
-  'Event & Display Equipment',
-  'Tabletop Display & Accessories',
-  'Merchandise',
-  'Souvenirs',
-  'Promotional Items',
-];
+// Starting list for a new store (an admin can change it in the Categories window).
+const CATEGORIES = ['Marketing Materials', 'Event Equipment', 'Display Accessories', 'Document & Filing Supplies', 'Promotional Merchandise'];
 
 const SEED_ITEMS = [
   { name: 'Goodies Bag', category: 'Merchandise', unit: 'pcs', quantity: 0, lowStockThreshold: 20 },

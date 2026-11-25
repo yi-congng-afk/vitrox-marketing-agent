@@ -86,7 +86,7 @@
 
       <div id="admin-bar" class="admin-bar admin-only" hidden>
         <span class="admin-bar-label">
-          <svg class="icon" aria-hidden="true"><use href="#i-unlock"/></svg> Admin tools
+          <svg class="icon" aria-hidden="true"><use href="#i-unlock"/></svg> <span id="admin-bar-role">Admin tools</span>
         </span>
         <button id="add-item-btn" class="primary-btn admin-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add New Item
@@ -94,19 +94,19 @@
         <button id="remove-item-btn" class="ghost-btn admin-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Remove Item
         </button>
-        <button id="categories-btn" class="ghost-btn admin-only" type="button" hidden>
+        <button id="categories-btn" class="ghost-btn owner-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-pencil"/></svg> Categories
         </button>
-        <button id="cleanup-btn" class="ghost-btn admin-only" type="button" hidden>
+        <button id="cleanup-btn" class="ghost-btn owner-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Clear History
         </button>
         <button id="labels-btn" class="ghost-btn admin-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-qr"/></svg> QR Labels
         </button>
-        <button id="backup-btn" class="ghost-btn admin-only" type="button" hidden>
+        <button id="backup-btn" class="ghost-btn owner-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Backup
         </button>
-        <button id="require-signin-btn" class="ghost-btn admin-only" type="button" hidden></button>
+        <button id="require-signin-btn" class="ghost-btn owner-only" type="button" hidden></button>
         <button id="audit-btn" class="ghost-btn admin-only" type="button" hidden>
           <svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg> Admins &amp; Log
         </button>
@@ -128,7 +128,7 @@
       <div id="category-filters" class="chip-row" role="group" aria-label="Filter by category"></div>
 
       <div class="results-bar">
-        <span id="results-count" class="results-count"></span>
+        <span class="results-left"><span id="results-count" class="results-count"></span><button id="archived-toggle" class="link-btn" type="button" hidden>Show archived</button></span>
         <span class="results-tools">
           <button id="refresh-btn" class="link-btn" type="button" title="Check for the latest stock">
             <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg> <span id="last-updated">Refresh</span>
@@ -190,9 +190,15 @@
         <div class="detail-info">
           <span id="detail-category" class="tag"></span>
           <h2 id="detail-name"></h2>
+          <p class="detail-code-line"><span id="detail-code" class="item-code"></span></p>
+          <p id="detail-archived" class="archived-banner" hidden><svg class="icon" aria-hidden="true"><use href="#i-package"/></svg> <span>Archived — no longer used. Its history is kept below.</span></p>
           <p class="detail-location-text"><svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg> <span id="detail-location-text"></span></p>
 
           <div class="stat-row">
+            <div class="stat">
+              <span class="stat-label">Total</span>
+              <span class="stat-value"><strong id="detail-total"></strong></span>
+            </div>
             <div class="stat">
               <span class="stat-label">Available</span>
               <span class="stat-value"><strong id="detail-qty"></strong> <span id="detail-unit"></span></span>
@@ -201,9 +207,14 @@
               <span class="stat-label">On loan</span>
               <span class="stat-value"><strong id="detail-on-loan"></strong> <span id="detail-unit-2"></span></span>
             </div>
+            <div class="stat" id="detail-reserved-row" hidden title="Booked for upcoming events">
+              <span class="stat-label">Reserved</span>
+              <span class="stat-value"><strong id="detail-reserved"></strong></span>
+            </div>
             <p id="detail-low-stock" class="low-stock-tag" hidden><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg> Low stock</p>
           </div>
 
+          <div id="detail-variations" class="detail-variations" hidden></div>
           <p id="detail-notes" class="detail-notes"></p>
           <div id="detail-bookings" class="detail-bookings" hidden></div>
           <p id="detail-loanable-note" class="loanable-note" hidden><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> <span>Loanable item — it stays recorded under the borrower's name until it is returned.</span></p>
@@ -219,11 +230,14 @@
             </span>
             <button id="detail-return-btn" class="ghost-btn sky-btn" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> Return Items</button>
             <button id="detail-report-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-flag"/></svg> Report Issue</button>
+            <button id="detail-qr-btn" class="ghost-btn" type="button" aria-expanded="false" aria-controls="detail-qr"><svg class="icon" aria-hidden="true"><use href="#i-qr"/></svg> QR Code</button>
           </div>
+          <div id="detail-qr" class="detail-qr" hidden></div>
           <div id="detail-admin-actions" class="detail-actions admin-actions admin-only" hidden>
             <button id="detail-addon-btn" class="ghost-btn admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add On Stock</button>
             <button id="detail-label-btn" class="ghost-btn admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-qr"/></svg> QR Label</button>
             <button id="detail-edit-btn" class="ghost-btn admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-pencil"/></svg> Edit</button>
+            <button id="detail-archive-btn" class="ghost-btn admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-package"/></svg> Archive</button>
             <button id="detail-delete-btn" class="ghost-btn danger-text admin-only" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Delete</button>
           </div>
 
@@ -246,19 +260,33 @@
       <h2 id="item-form-title">Add New Item</h2>
       <form id="item-form">
         <label>Item name <input id="form-name" type="text" required /></label>
-        <label>Category
-          <select id="form-category" required></select>
-        </label>
+        <div class="form-row">
+          <label>Item code <input id="form-code" type="text" maxlength="20" placeholder="Made for you, e.g. EVT-003" autocomplete="off" /></label>
+          <label>Category
+            <select id="form-category" required></select>
+          </label>
+        </div>
         <label>Unit <input id="form-unit" type="text" placeholder="pcs" value="pcs" /></label>
         <div class="form-row">
-          <label>Current quantity <input id="form-quantity" type="number" inputmode="numeric" min="0" step="1" value="0" required /></label>
+          <label>Total quantity <input id="form-quantity" type="number" inputmode="numeric" min="0" step="1" value="0" required /></label>
           <label>Low-stock alert at <input id="form-threshold" type="number" inputmode="numeric" min="0" step="1" value="5" required /></label>
         </div>
         <label class="checkbox-label">
           <input id="form-returnable" type="checkbox" />
           <span>Loanable equipment (tables, chairs, backdrops, etc.) — adds a Return Items option and tracks Move Out as a loan instead of permanent consumption</span>
         </label>
-        <label>Location (text, e.g. "Store Room A, Shelf 3") <input id="form-location-text" type="text" /></label>
+        <label class="checkbox-label">
+          <input id="form-has-variations" type="checkbox" />
+          <span>Has design variations — different artwork or content (e.g. Engineering, Open Day) sharing the one stock quantity above</span>
+        </label>
+        <fieldset id="form-variations" class="variations-editor" hidden>
+          <legend>Design variations</legend>
+          <p class="fine-print">All variations share the same physical stock. Untick “Active” to stop a design being chosen without losing its history.</p>
+          <div class="variation-head" aria-hidden="true"><span>Code</span><span>Name</span><span>Active</span><span></span></div>
+          <ul id="form-variation-list" class="variation-list"></ul>
+          <button id="form-variation-add" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add variation</button>
+        </fieldset>
+        <label>Storage location (e.g. "Store Room A, Shelf 3") <input id="form-location-text" type="text" /></label>
         <label>Item photo <input id="form-item-image" type="file" accept="image/*" /></label>
         <div id="form-item-image-row" class="upload-preview-row" hidden>
           <img id="form-item-image-preview" class="upload-preview" alt="Item photo preview" />
@@ -565,7 +593,7 @@
       <div class="audit-tools">
         <label>Month <select id="audit-month"></select></label>
         <label class="audit-search">Search <input id="audit-search" type="search" placeholder="Item, person, action…" /></label>
-        <button id="manage-admins-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg> Manage admins</button>
+        <button id="manage-admins-btn" class="ghost-btn owner-only" type="button"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg> Manage admins</button>
       </div>
       <div id="audit-list" class="audit-list"></div>
     </div>
@@ -574,17 +602,24 @@
   <div id="admins-modal" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="admins-title" tabindex="-1">
       <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
-      <h2 id="admins-title"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg> Admins</h2>
-      <p class="subtitle">People on this list get admin tools when they sign in with their ViTrox account, with no password needed. The admin password still works as a backup.</p>
+      <h2 id="admins-title"><svg class="icon" aria-hidden="true"><use href="#i-user"/></svg> Admins &amp; Store Managers</h2>
+      <p class="subtitle">People on these lists get their tools when they sign in with their ViTrox account, with no password needed. The admin password still works as a backup (as an admin).</p>
       <form id="admins-form">
+        <h3 class="role-heading">Admins <span class="h3-note">— everything, including people, categories and settings</span></h3>
         <ul id="admins-list" class="categories-list"></ul>
         <div class="category-add">
           <input id="admin-new" type="email" maxlength="120" placeholder="name@vitrox.com" aria-label="New admin's ViTrox email" />
           <button id="admin-add-btn" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add</button>
         </div>
+        <h3 class="role-heading">Store Managers <span class="h3-note">— items and stock, all bookings, checkouts and returns, the activity log</span></h3>
+        <ul id="managers-list" class="categories-list"></ul>
+        <div class="category-add">
+          <input id="manager-new" type="email" maxlength="120" placeholder="name@vitrox.com" aria-label="New Store Manager's ViTrox email" />
+          <button id="manager-add-btn" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add</button>
+        </div>
         <p id="admins-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
-          <button type="submit" class="primary-btn">Save admins</button>
+          <button type="submit" class="primary-btn">Save</button>
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
       </form>
