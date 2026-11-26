@@ -1663,6 +1663,14 @@ function renderDetail(item, { resetQty }) {
   el('detail-archived').hidden = !item.archived;
   el('detail-archive-btn').innerHTML = `${icon('package')} ${item.archived ? 'Restore' : 'Archive'}`;
   el('detail-variations').hidden = !item.hasVariations || !(item.variations || []).length;
+  const designs = activeVariations(item);
+  const designSelect = el('detail-design');
+  const keepDesign = designSelect.dataset.itemId === item.id ? designSelect.value : '';
+  designSelect.hidden = designs.length === 0;
+  designSelect.dataset.itemId = item.id;
+  designSelect.innerHTML =
+    `<option value="">Design…</option>` + designs.map((v) => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.name)}</option>`).join('');
+  designSelect.value = designs.some((v) => v.id === keepDesign) ? keepDesign : '';
   el('detail-variations').innerHTML = renderVariationChips(item);
   if (el('detail-qr').dataset.itemId !== item.id) hideDetailQr();
   el('detail-location-text').textContent = item.locationText || 'Location not specified';
@@ -1889,13 +1897,12 @@ el('txn-form').addEventListener('submit', (e) => {
 // ---------- Cart + checkout (the only way stock is moved out) ----------
 
 // 'now' = move the items out now; 'book' = reserve them for an event's dates.
-let cartMode = 'now';
+// Always 'now' — booking for an event is done in the event form.
+const cartMode = 'now';
 let cartBookingId = (() => {
   const stored = readStored(CART_BOOKING_KEY, null);
   return typeof stored === 'string' && cart.length > 0 ? stored : null;
 })();
-// Set after the server warned about a clash: the same booking sent again is "Book anyway".
-let clashAckKey = null;
 
 function saveCart() {
   if (cart.length === 0) cartBookingId = null;
@@ -1910,13 +1917,21 @@ function cartLineMax(item) {
   return cartMode === 'book' ? Math.max(0, item.quantity || 0) : availableQty(item);
 }
 
+// A cart line is one item, or one design of an item: { itemId, variationId?, quantity }.
+// Designs of an item share its stock, so limits are checked per item.
+function cartKey(line) {
+  return `${line.itemId}|${line.variationId || ''}`;
+}
+
 function cartQty(itemId) {
-  const line = cart.find((l) => l.itemId === itemId);
-  return line ? line.quantity : 0;
+  return cart.filter((l) => l.itemId === itemId).reduce((sum, l) => sum + l.quantity, 0);
 }
 
 function cartLoanableItems() {
-  return cart.map((line) => items.find((i) => i.id === line.itemId)).filter((item) => item && item.returnable);
+  const seen = new Set();
+  return cart
+    .map((line) => items.find((i) => i.id === line.itemId))
+    .filter((item) => item && item.returnable && !seen.has(item.id) && seen.add(item.id));
 }
 
 // Call after any change to the cart so every view that shows it stays in step.
@@ -1929,7 +1944,7 @@ function cartChanged() {
   }
 }
 
-function addToCart(itemId, rawQuantity) {
+function addToCart(itemId, rawQuantity, variationId) {
   const item = items.find((i) => i.id === itemId);
   if (!item) return false;
   const quantity = Math.round(Number(rawQuantity));
@@ -1951,20 +1966,28 @@ function addToCart(itemId, rawQuantity) {
     return false;
   }
 
-  const line = cart.find((l) => l.itemId === itemId);
+  const designs = activeVariations(item);
+  const variation = designs.find((v) => v.id === variationId) || null;
+  const key = cartKey({ itemId, variationId: variation ? variation.id : null });
+  const line = cart.find((l) => cartKey(l) === key);
   if (line) line.quantity += quantity;
-  else cart.push({ itemId, quantity });
+  else cart.push(variation ? { itemId, variationId: variation.id, quantity } : { itemId, quantity });
   cartChanged();
-  showToast(`Added ${quantity} × ${item.name} to cart.`, 'success');
+  showToast(`Added ${quantity} × ${item.name}${variation ? ` (${variation.name})` : ''} to cart.`, 'success');
   return true;
 }
 
-el('detail-cart-btn').addEventListener('click', () => addToCart(selectedItemId, el('detail-cart-qty').value));
+function detailDesign() {
+  const select = el('detail-design');
+  return select && !select.hidden ? select.value || null : null;
+}
+
+el('detail-cart-btn').addEventListener('click', () => addToCart(selectedItemId, el('detail-cart-qty').value, detailDesign()));
 
 el('detail-cart-qty').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
-  addToCart(selectedItemId, el('detail-cart-qty').value);
+  addToCart(selectedItemId, el('detail-cart-qty').value, detailDesign());
 });
 
 function cartLineWarning(line, available) {
@@ -1978,39 +2001,46 @@ function renderCart() {
   el('cart-empty').hidden = cart.length > 0;
   el('checkout-form').hidden = cart.length === 0;
 
-  const booking = cartMode === 'book';
   cart.forEach((line) => {
     const item = items.find((i) => i.id === line.itemId);
     if (!item) return;
     const available = cartLineMax(item);
     const unit = item.unit || 'pcs';
     const name = escapeHtml(item.name);
-    const warning = booking
-      ? line.quantity > available
-        ? `The store only has ${available} in total.`
-        : ''
-      : cartLineWarning(line, available);
-    const headsUp = booking ? '' : bookingHeadsUp(item, line.quantity);
+    // Several designs of one item share what is available.
+    const others = cartQty(item.id) - line.quantity;
+    const room = Math.max(0, available - others);
+    const warning = cartLineWarning(line, room);
+    const headsUp = bookingHeadsUp(item, cartQty(item.id));
+    const designs = activeVariations(item);
 
     const thumb = item.itemImage
       ? `<img class="cart-line-thumb" src="${escapeHtml(item.itemImage)}" alt="" loading="lazy" decoding="async" />`
       : `<div class="cart-line-thumb">${icon('package')}</div>`;
+    const designPicker = designs.length
+      ? `<select class="cart-design${line.variationId ? '' : ' needs-choice'}" data-design aria-label="Design of ${name}">` +
+        `<option value="">Choose design…</option>` +
+        designs.map((v) => `<option value="${escapeHtml(v.id)}"${v.id === line.variationId ? ' selected' : ''}>${escapeHtml(v.name)}</option>`).join('') +
+        `</select>`
+      : '';
 
     const row = document.createElement('div');
     row.className = 'cart-line';
     row.dataset.itemId = item.id;
+    row.dataset.key = cartKey(line);
     row.innerHTML =
       thumb +
       `<div class="line-info"><strong>${name}</strong>` +
-      `<div class="line-meta">${available} ${escapeHtml(unit)} ${booking ? 'in the store' : 'available'}` +
+      `<div class="line-meta">${available} ${escapeHtml(unit)} available` +
       (item.returnable ? `<span class="on-loan-tag">${icon('return')} Loan — must return</span>` : '') +
       `</div>` +
+      designPicker +
       `<div class="line-warning"${warning ? '' : ' hidden'}>${escapeHtml(warning)}</div>` +
       (headsUp ? `<div class="line-booked">${icon('calendar')}<span>${escapeHtml(headsUp)}</span></div>` : '') +
       `</div>` +
       `<span class="stepper">` +
       `<button type="button" class="step-btn" data-step="-1" aria-label="Decrease quantity">${icon('minus')}</button>` +
-      `<input type="number" inputmode="numeric" min="1" max="${Math.max(available, 1)}" step="1" value="${line.quantity}" aria-label="Quantity of ${name}" />` +
+      `<input type="number" inputmode="numeric" min="1" max="${Math.max(room, 1)}" step="1" value="${line.quantity}" aria-label="Quantity of ${name}" />` +
       `<button type="button" class="step-btn" data-step="1" aria-label="Increase quantity">${icon('plus')}</button>` +
       `</span>` +
       `<button type="button" class="icon-btn danger-text" data-remove aria-label="Remove ${name} from cart" title="Remove from cart">${icon('trash')}</button>`;
@@ -2018,69 +2048,28 @@ function renderCart() {
   });
 
   const loanable = cartLoanableItems();
-  const hasLoanable = loanable.length > 0 && !booking;
+  const hasLoanable = loanable.length > 0;
   el('checkout-return-label').hidden = !hasLoanable;
   el('checkout-return-date').required = hasLoanable;
   const note = el('checkout-loan-note');
   note.hidden = !hasLoanable;
   note.innerHTML = hasLoanable
-    ? `${icon('return')}<span>${escapeHtml(loanable.map((i) => i.name).join(', '))} will be recorded as on loan under your name until returned (Loans &amp; Bookings → Return).</span>`
+    ? `${icon('return')}<span>${escapeHtml(loanable.map((i) => i.name).join(', '))} will be recorded as on loan under your name until returned (Loans &amp; Returns → Return).</span>`
     : '';
 
-  el('cart-mode-now').classList.toggle('active', !booking);
-  el('cart-mode-now').setAttribute('aria-pressed', String(!booking));
-  el('cart-mode-book').classList.toggle('active', booking);
-  el('cart-mode-book').setAttribute('aria-pressed', String(booking));
-  el('cart-mode-hint').textContent = booking
-    ? 'Nothing leaves the store now. The items are reserved for your event dates, and you are warned if they clash with other bookings.'
-    : 'The items are recorded as moved out under your name right now.';
-  el('booking-dates').hidden = !booking;
-  el('booking-start').required = booking;
-  el('booking-end').required = booking;
-  el('booking-start').min = todayStr();
-  el('booking-end').min = el('booking-start').value || todayStr();
-  el('checkout-purpose-label').textContent = booking ? 'Event' : 'Purpose / event';
-  if (!booking) el('booking-clashes').hidden = true;
-
-  const fromBooking = !booking && cartBookingId ? allBookings.find((b) => b.id === cartBookingId) : null;
+  const fromBooking = cartBookingId ? allBookings.find((b) => b.id === cartBookingId) : null;
   const bookingNote = el('cart-booking-note');
   bookingNote.hidden = !fromBooking;
   bookingNote.innerHTML = fromBooking
-    ? `${icon('calendar')}<span>Moving out the booking <strong>“${escapeHtml(fromBooking.event)}”</strong> (${escapeHtml(fmtRange(fromBooking.startDate, fromBooking.endDate))}). ` +
-      `It will be marked as collected. Change the quantities if you need fewer or more. ` +
-      `<button type="button" class="link-btn" id="cart-unlink-booking">Not this booking</button></span>`
+    ? `${icon('calendar')}<span>Moving out the event <strong>“${escapeHtml(fromBooking.event)}”</strong> (${escapeHtml(fmtRange(fromBooking.startDate, fromBooking.endDate))}). ` +
+      `It will be marked as collected. Change the quantities to what is actually taken. ` +
+      `<button type="button" class="link-btn" id="cart-unlink-booking">Not this event</button></span>`
     : '';
+  el('cart-book-btn').hidden = Boolean(fromBooking);
 
-  el('checkout-submit-btn').innerHTML = booking
-    ? `${icon('calendar')} ${clashAckKey ? 'Book anyway' : `Book ${plural(cart.length, 'item', 'items')}`}`
-    : `${icon('check')} Checkout ${plural(cart.length, 'item', 'items')}`;
+  el('checkout-submit-btn').innerHTML = `${icon('check')} ${fromBooking ? 'Collect' : 'Checkout'} ${plural(cart.length, 'item', 'items')}`;
 }
 
-function resetClashWarning() {
-  if (!clashAckKey && el('booking-clashes').hidden) return;
-  clashAckKey = null;
-  el('booking-clashes').hidden = true;
-  el('booking-clashes').innerHTML = '';
-  if (!el('cart-modal').hidden) renderCart();
-}
-
-function setCartMode(mode) {
-  if (cartMode === mode) return;
-  cartMode = mode;
-  clashAckKey = null;
-  el('booking-clashes').hidden = true;
-  setFormError('checkout-form-error', '');
-  renderCart();
-  renderGrid();
-}
-
-el('cart-mode-now').addEventListener('click', () => setCartMode('now'));
-el('cart-mode-book').addEventListener('click', () => setCartMode('book'));
-el('checkout-form').addEventListener('input', (e) => {
-  if (e.target.id === 'booking-start' && el('booking-end').value && el('booking-end').value < e.target.value) el('booking-end').value = e.target.value;
-  if (e.target.id === 'booking-start') el('booking-end').min = e.target.value || todayStr();
-  if (cartMode === 'book') resetClashWarning();
-});
 el('cart-booking-note').addEventListener('click', (e) => {
   if (!e.target.closest('#cart-unlink-booking')) return;
   cartBookingId = null;
@@ -2088,39 +2077,63 @@ el('cart-booking-note').addEventListener('click', (e) => {
   renderCart();
 });
 
+function cartLineFromRow(row) {
+  return row ? cart.find((l) => cartKey(l) === row.dataset.key) || null : null;
+}
+
 el('cart-lines').addEventListener('change', (e) => {
   const row = e.target.closest('.cart-line');
-  if (!row || e.target.type !== 'number') return;
-  const line = cart.find((l) => l.itemId === row.dataset.itemId);
-  const item = items.find((i) => i.id === row.dataset.itemId);
-  if (!line || !item) return;
+  const line = cartLineFromRow(row);
+  if (!line) return;
+  const item = items.find((i) => i.id === line.itemId);
+  if (!item) return;
 
-  const available = cartLineMax(item);
+  if (e.target.matches('[data-design]')) {
+    const next = e.target.value || null;
+    const same = cart.find((l) => l !== line && l.itemId === line.itemId && (l.variationId || null) === next);
+    if (same) {
+      // Already a line for that design: add the two together.
+      same.quantity += line.quantity;
+      cart = cart.filter((l) => l !== line);
+    } else if (next) line.variationId = next;
+    else delete line.variationId;
+    cartChanged();
+    renderCart();
+    return;
+  }
+  if (e.target.type !== 'number') return;
+
+  const room = Math.max(0, cartLineMax(item) - (cartQty(item.id) - line.quantity));
   let next = Math.round(Number(e.target.value));
   if (!next || next < 1) next = 1;
-  if (available > 0 && next > available) next = available;
+  if (room > 0 && next > room) next = room;
   line.quantity = next;
   e.target.value = String(next);
   cartChanged();
   // Redraw so warnings and booking heads-ups follow the new quantity.
-  clashAckKey = null;
-  el('booking-clashes').hidden = true;
+  const key = cartKey(line);
   renderCart();
-  const again = el('cart-lines').querySelector(`.cart-line[data-item-id="${CSS.escape(line.itemId)}"] input[type="number"]`);
-  if (again && document.activeElement === document.body) again.focus({ preventScroll: true });
+  const again = [...el('cart-lines').querySelectorAll('.cart-line')].find((r) => r.dataset.key === key);
+  const input = again && again.querySelector('input[type="number"]');
+  if (input && document.activeElement === document.body) input.focus({ preventScroll: true });
 });
 
 el('cart-lines').addEventListener('click', (e) => {
   const removeBtn = e.target.closest('[data-remove]');
   if (!removeBtn) return;
-  const row = removeBtn.closest('.cart-line');
-  cart = cart.filter((l) => l.itemId !== row.dataset.itemId);
+  const line = cartLineFromRow(removeBtn.closest('.cart-line'));
+  cart = cart.filter((l) => l !== line);
   cartChanged();
-  clashAckKey = null;
-  el('booking-clashes').hidden = true;
   renderCart();
   focusInside(el('cart-modal'));
 });
+
+el('cart-book-btn').addEventListener('click', () => {
+  const lines = cart.map((l) => ({ itemId: l.itemId, variationId: l.variationId || null, quantity: l.quantity }));
+  closeModal('cart-modal');
+  openEventForm({ lines, fromCart: true, event: el('checkout-purpose').value.trim() });
+});
+
 
 function openCart() {
   const user = session ? {} : rememberedUser();
@@ -2152,8 +2165,7 @@ el('cart-clear-btn').addEventListener('click', async () => {
 
 function showCheckoutSuccess(summary, body, loanCount) {
   el('success-title').textContent = 'Checkout recorded';
-  el('success-loans-btn').textContent = 'View Loan Records';
-  el('success-loans-btn').dataset.tab = 'open';
+  el('success-loans-btn').textContent = 'View Loans & Returns';
   el('success-subtitle').textContent = `Recorded under ${body.name.trim()} (${body.employeeNo.trim()}) for “${body.purpose.trim()}”.`;
   el('success-lines').innerHTML = summary
     .map(
@@ -2167,94 +2179,13 @@ function showCheckoutSuccess(summary, body, loanCount) {
   note.hidden = loanCount === 0;
   note.innerHTML =
     loanCount > 0
-      ? `${icon('return')}<span>Please bring the loaned ${loanCount > 1 ? 'items' : 'item'} back by <strong>${escapeHtml(fmtDate(body.expectedReturnDate))}</strong>, then record it under Loan Records → Return.</span>`
+      ? `${icon('return')}<span>Please bring the loaned ${loanCount > 1 ? 'items' : 'item'} back by <strong>${escapeHtml(fmtDate(body.expectedReturnDate))}</strong>, then record it under Loans &amp; Returns → Return.</span>`
       : '';
   el('success-loans-btn').hidden = loanCount === 0;
   openModal('success-modal');
 }
 
-el('success-loans-btn').addEventListener('click', (e) => openLoansPanel(e.currentTarget.dataset.tab || 'open'));
-
-function showBookingSuccess(booking) {
-  el('success-title').textContent = 'Booking saved';
-  el('success-subtitle').textContent =
-    `For “${booking.event}”, ${fmtRange(booking.startDate, booking.endDate)}. Booked under ${booking.name}${booking.employeeNo ? ` (${booking.employeeNo})` : ''}.`;
-  el('success-lines').innerHTML = booking.lines
-    .map((line) => {
-      const item = items.find((i) => i.id === line.itemId) || {};
-      return `<li><span>${escapeHtml(line.itemName)}</span><strong>${line.quantity} ${escapeHtml(item.unit || 'pcs')}</strong></li>`;
-    })
-    .join('');
-  const note = el('success-loan-note');
-  note.hidden = false;
-  note.innerHTML =
-    `${icon('calendar')}<span>Nothing has left the store yet. On the day, open <strong>Loans &amp; Bookings → Event Bookings</strong> and press <strong>Move out</strong>.` +
-    (booking.clashesAccepted ? ' This booking was made over the available stock by an admin / Store Manager — make sure the other events have agreed.' : '') +
-    `</span>`;
-  el('success-loans-btn').textContent = 'View Bookings';
-  el('success-loans-btn').dataset.tab = 'bookings';
-  el('success-loans-btn').hidden = false;
-  openModal('success-modal');
-}
-
-function showClashes(clashes, canOverride) {
-  const box = el('booking-clashes');
-  box.innerHTML =
-    `<p class="clash-title">${icon('alert')}<strong>Not enough for those dates</strong></p><ul>` +
-    clashes
-      .map((c) => {
-        const why = c.conflicts.map((b) => `${b.quantity} booked for “${b.event}” (${fmtRange(b.startDate, b.endDate)}, ${b.name})`);
-        if (c.out) why.push(`${c.out} out on loan and not due back before then`);
-        return `<li><strong>${escapeHtml(c.itemName)}</strong>: you asked for ${c.wanted}, ${c.available} free${why.length ? ` — ${escapeHtml(why.join('; '))}` : ''}.</li>`;
-      })
-      .join('') +
-    `</ul><p>${
-      canOverride
-        ? 'Lower the quantity, remove the item or pick other dates. As an admin / Store Manager you can still press <strong>Book anyway</strong> if it has been agreed (it is logged).'
-        : 'Lower the quantity, remove the item or pick other dates. If you need more, ask an admin or Store Manager.'
-    }</p>`;
-  box.hidden = false;
-  box.scrollIntoView({ block: 'nearest' });
-}
-
-async function submitBooking() {
-  const start = el('booking-start').value;
-  const body = {
-    ...personFrom('checkout-name', 'checkout-employee-no'),
-    event: el('checkout-purpose').value,
-    startDate: start,
-    endDate: el('booking-end').value || start,
-    lines: cart.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
-  };
-  if (!start) {
-    setFormError('checkout-form-error', 'Pick the date the items are needed from.');
-    return;
-  }
-  const key = JSON.stringify(body);
-  const res = await request(API.bookings, { method: 'POST', body: { ...body, acceptClashes: clashAckKey === key } });
-  if (!res.ok) {
-    if (res.status === 409 && res.data.code === 'clash') {
-      clashAckKey = res.data.canOverride ? key : null;
-      showClashes(res.data.clashes || [], Boolean(res.data.canOverride));
-      renderCart();
-      return;
-    }
-    setFormError('checkout-form-error', res.status === 0 ? 'Could not reach the store server — nothing was booked. Please try again.' : res.error);
-    return;
-  }
-  rememberPerson(body);
-  cart = [];
-  cartMode = 'now';
-  clashAckKey = null;
-  saveCart();
-  el('checkout-purpose').value = '';
-  el('booking-start').value = '';
-  el('booking-end').value = '';
-  el('booking-clashes').hidden = true;
-  renderGrid();
-  showBookingSuccess(res.data.booking);
-  await loadBookings();
-}
+el('success-loans-btn').addEventListener('click', () => openLoansPanel('open'));
 
 el('checkout-form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -2262,8 +2193,12 @@ el('checkout-form').addEventListener('submit', (e) => {
 
   withBusy(el('checkout-submit-btn'), async () => {
     setFormError('checkout-form-error', '');
-    if (cartMode === 'book') {
-      await submitBooking();
+    const missingDesign = cart.find((l) => {
+      const item = items.find((i) => i.id === l.itemId);
+      return item && activeVariations(item).length && !l.variationId;
+    });
+    if (missingDesign) {
+      setFormError('checkout-form-error', `Choose a design for “${items.find((i) => i.id === missingDesign.itemId).name}”.`);
       return;
     }
     const hasLoanable = cartLoanableItems().length > 0;
@@ -2271,7 +2206,7 @@ el('checkout-form').addEventListener('submit', (e) => {
       ...personFrom('checkout-name', 'checkout-employee-no'),
       purpose: el('checkout-purpose').value,
       expectedReturnDate: hasLoanable ? el('checkout-return-date').value || null : null,
-      lines: cart.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
+      lines: cart.map((line) => ({ itemId: line.itemId, variationId: line.variationId || undefined, quantity: line.quantity })),
     };
     if (cartBookingId) body.bookingId = cartBookingId;
 
@@ -2291,7 +2226,8 @@ el('checkout-form').addEventListener('submit', (e) => {
     rememberPerson(body);
     const summary = cart.map((line) => {
       const item = items.find((i) => i.id === line.itemId) || {};
-      return { name: item.name || 'Item', quantity: line.quantity, unit: item.unit || 'pcs', returnable: Boolean(item.returnable) };
+      const design = (item.variations || []).find((v) => v.id === line.variationId);
+      return { name: `${item.name || 'Item'}${design ? ` (${design.name})` : ''}`, quantity: line.quantity, unit: item.unit || 'pcs', returnable: Boolean(item.returnable) };
     });
     cart = [];
     saveCart();
@@ -2305,8 +2241,8 @@ el('checkout-form').addEventListener('submit', (e) => {
       (res.data.loans || []).length
     );
     if (res.data.booking) {
-      el('success-subtitle').textContent += ` Booking “${res.data.booking.event}” is now marked as collected.`;
-      loadBookings();
+      el('success-subtitle').textContent += ` Event “${res.data.booking.event}” is now marked as collected.`;
+      loadEventData().then(refreshEventViews);
     }
     renderGrid();
     await loadItems({ silent: true });
@@ -2430,7 +2366,10 @@ el('return-form').addEventListener('submit', (e) => {
     await loadItems({ silent: true });
     loadReportsBadge();
     if (returnOrigin === 'loans') await openLoansPanel();
-    else await openDetail(selectedItemId);
+    else if (returnOrigin === 'event') {
+      await loadEventData();
+      refreshEventViews();
+    } else await openDetail(selectedItemId);
   });
 });
 
@@ -2443,16 +2382,14 @@ let loansSearch = '';
 const selectedLoanIds = new Set();
 
 async function openLoansPanel(tab) {
-  if (tab === 'open' || tab === 'all' || tab === 'bookings') loansTab = tab;
+  if (tab === 'open' || tab === 'all') loansTab = tab;
   selectedLoanIds.clear();
   renderLoansPanel();
   openModal('loans-modal');
 
   const [res] = await Promise.all([
     request(API.loans),
-    loadBookings().then((ok) => {
-      if (ok && loansTab === 'bookings') renderLoansPanel();
-    }),
+    loadBookings(),
   ]);
   if (!res.ok) {
     if (loansLoaded) showToast(`Could not refresh the loan records. ${res.error}`, 'error');
@@ -2504,22 +2441,12 @@ function syncSelectAll(list) {
 
 function renderLoansPanel() {
   const openTab = loansTab === 'open';
-  const bookingTab = loansTab === 'bookings';
-  const allTab = !openTab && !bookingTab;
+  const allTab = !openTab;
   el('loans-tab-open').classList.toggle('active', openTab);
   el('loans-tab-open').setAttribute('aria-pressed', String(openTab));
   el('loans-tab-all').classList.toggle('active', allTab);
   el('loans-tab-all').setAttribute('aria-pressed', String(allTab));
-  el('loans-tab-bookings').classList.toggle('active', bookingTab);
-  el('loans-tab-bookings').setAttribute('aria-pressed', String(bookingTab));
   el('loans-return-selected-btn').hidden = !openTab;
-  el('loans-export-btn').hidden = bookingTab;
-  el('new-booking-btn').hidden = !bookingTab;
-  el('loans-search').placeholder = bookingTab ? 'Search event, item or person…' : 'Search item, borrower or event…';
-  if (bookingTab) {
-    renderBookingsTable();
-    return;
-  }
 
   el('loans-head').innerHTML = openTab
     ? '<tr><th><input type="checkbox" id="loans-select-all" aria-label="Select every loan shown" /></th><th>Item</th><th>Not returned</th><th>Borrowed by</th><th>Purpose / event</th><th>Moved out</th><th>Due back</th><th><span class="sr-only">Return</span></th></tr>'
@@ -2713,10 +2640,6 @@ el('loans-tab-all').addEventListener('click', () => {
   renderLoansPanel();
 });
 
-el('loans-tab-bookings').addEventListener('click', () => {
-  loansTab = 'bookings';
-  renderLoansPanel();
-});
 
 // ---------- Event bookings ----------
 
@@ -2782,7 +2705,7 @@ function renderDetailBookings(item) {
       )
       .join('') +
     `</ul>` +
-    (list.length > shown.length ? `<p class="muted-text">+ ${list.length - shown.length} more in Loans &amp; Bookings → Event Bookings</p>` : '');
+    (list.length > shown.length ? `<p class="muted-text">+ ${list.length - shown.length} more in Events</p>` : '');
 }
 
 function bookingStatusHtml(b) {
@@ -2806,55 +2729,11 @@ function sortedBookings() {
   return live.concat(rest);
 }
 
-function renderBookingsTable() {
-  const admin = isAdminUnlocked();
-  el('loans-head').innerHTML =
-    '<tr><th>Event</th><th>Dates</th><th>Items</th><th>Booked by</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr>';
-  const term = loansSearch.trim().toLowerCase();
-  const list = sortedBookings().filter(
-    (b) =>
-      !term ||
-      [b.event, b.name, b.employeeNo, b.notes, ...(b.lines || []).map((l) => l.itemName)].some((v) => String(v || '').toLowerCase().includes(term))
-  );
-  const empty = el('loans-empty');
-  empty.hidden = list.length > 0;
-  if (!bookingsLoaded) empty.textContent = 'Loading bookings…';
-  else if (term) empty.textContent = 'No bookings match your search.';
-  else empty.textContent = 'No event bookings yet. Put the items in your cart, then choose “Book for an event”.';
-
-  el('loans-body').innerHTML = list
-    .map((b) => {
-      const live = isLiveBooking(b);
-      const actions = [];
-      if (live) {
-        actions.push(`<button type="button" class="ghost-btn sky-btn" data-booking-collect="${escapeHtml(b.id)}">${icon('cart')} Move out</button>`);
-        if (ownsBooking(b) || admin) {
-          actions.push(`<button type="button" class="ghost-btn" data-booking-cancel="${escapeHtml(b.id)}">Cancel</button>`);
-        }
-      }
-      if (admin) {
-        actions.push(
-          `<button type="button" class="icon-btn danger-text" data-booking-delete="${escapeHtml(b.id)}" aria-label="Delete this booking record" title="Delete this booking record">${icon('trash')}</button>`
-        );
-      }
-      const linesText = (b.lines || []).map((l) => `${l.itemName} × ${l.quantity}`).join(', ');
-      return (
-        `<tr${live ? '' : ' class="is-past"'}>` +
-        `<td><strong>${escapeHtml(b.event)}</strong>${b.notes ? `<div class="muted-text">${escapeHtml(b.notes)}</div>` : ''}</td>` +
-        `<td class="nowrap">${escapeHtml(fmtRange(b.startDate, b.endDate))}</td>` +
-        `<td>${escapeHtml(linesText)}</td>` +
-        `<td>${escapeHtml(b.name)}${b.employeeNo ? ` (${escapeHtml(b.employeeNo)})` : ''}</td>` +
-        `<td>${bookingStatusHtml(b)}</td>` +
-        `<td class="row-actions">${actions.join('')}</td>` +
-        `</tr>`
-      );
-    })
-    .join('');
-}
-
 // "Move out" on a booking: fills the cart with its items, event and return date.
 async function collectBooking(b) {
-  const lines = (b.lines || []).filter((l) => items.some((i) => i.id === l.itemId)).map((l) => ({ itemId: l.itemId, quantity: l.quantity }));
+  const lines = (b.lines || [])
+    .filter((l) => items.some((i) => i.id === l.itemId))
+    .map((l) => (l.variationId ? { itemId: l.itemId, variationId: l.variationId, quantity: l.quantity } : { itemId: l.itemId, quantity: l.quantity }));
   if (lines.length === 0) {
     showToast('The items in this booking are no longer in the store.', 'error');
     return;
@@ -2870,8 +2749,6 @@ async function collectBooking(b) {
   }
   cart = lines;
   cartBookingId = b.id;
-  cartMode = 'now';
-  clashAckKey = null;
   saveCart();
   renderGrid();
   el('checkout-purpose').value = b.event;
@@ -2882,9 +2759,9 @@ async function collectBooking(b) {
 
 async function cancelBooking(b, button) {
   const ok = await confirmDialog({
-    title: 'Cancel this booking?',
+    title: 'Cancel this event?',
     message: `“${b.event}” (${fmtRange(b.startDate, b.endDate)}), booked by ${b.name}. The items will be free for other events again.`,
-    confirmLabel: 'Cancel booking',
+    confirmLabel: 'Cancel event',
   });
   if (!ok) return;
   await withBusy(button, async () => {
@@ -2893,15 +2770,15 @@ async function cancelBooking(b, button) {
       showToast(res.error, 'error');
       return;
     }
-    showToast('Booking cancelled.', 'success');
-    await loadBookings();
-    renderLoansPanel();
+    showToast('Event cancelled — its items are free again.', 'success');
+    await loadEventData();
+    refreshEventViews();
   });
 }
 
 async function deleteBooking(b) {
   const ok = await confirmDialog({
-    title: 'Delete this booking record?',
+    title: 'Delete this event record?',
     message: `“${b.event}” (${fmtRange(b.startDate, b.endDate)}), booked by ${b.name}. This removes the record for good — to just call it off, use Cancel.`,
     confirmLabel: 'Delete record',
   });
@@ -2911,20 +2788,809 @@ async function deleteBooking(b) {
     showToast(res.error, 'error');
     return;
   }
-  showToast('Booking record deleted.', 'success');
-  await loadBookings();
-  renderLoansPanel();
+  showToast('Event record deleted.', 'success');
+  closeModal('event-modal');
+  await loadEventData();
+  refreshEventViews();
 }
 
-el('new-booking-btn').addEventListener('click', () => {
-  closeModal('loans-modal');
-  cartMode = 'book';
-  if (cart.length === 0) {
-    renderGrid();
-    showToast('Add the items for your event to the cart, then open the cart to book them.', '', 6000);
+// ---------- Sections: Inventory · Calendar · Events ----------
+
+let currentView = 'inventory';
+
+function showView(view) {
+  if (!['inventory', 'calendar', 'events'].includes(view)) view = 'inventory';
+  currentView = view;
+  document.querySelectorAll('.view-tab').forEach((tab) => {
+    const on = tab.dataset.view === view;
+    tab.classList.toggle('active', on);
+    tab.setAttribute('aria-selected', String(on));
+  });
+  ['inventory', 'calendar', 'events'].forEach((v) => {
+    el(`view-${v}`).hidden = v !== view;
+  });
+  if (view === 'calendar') {
+    renderCalendar();
+    loadEventData().then(() => currentView === 'calendar' && renderCalendar());
+  }
+  if (view === 'events') {
+    renderEventsList();
+    loadEventData().then(() => currentView === 'events' && renderEventsList());
+  }
+}
+
+document.querySelectorAll('.view-tab').forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view)));
+
+// Bookings and loans together: events show whether their items are out or back.
+async function loadEventData() {
+  const [ok, loans] = await Promise.all([loadBookings(), request(API.loans)]);
+  if (loans.ok) {
+    allLoans = loans.data.loans || [];
+    loansLoaded = true;
+  }
+  return ok;
+}
+
+function refreshEventViews() {
+  if (currentView === 'calendar') renderCalendar();
+  if (currentView === 'events') renderEventsList();
+  if (!el('event-modal').hidden && shownEventId) renderEventDetail(shownEventId);
+}
+
+// ---------- Event status ----------
+
+const EVENT_CATEGORIES = ['Open Day', 'Experience Day', 'Education Fair', 'School Exhibition', 'Talk', 'Graduation Ceremony', 'Other'];
+
+function eventLoans(b) {
+  return allLoans.filter((l) => l.bookingId === b.id || (b.checkoutId && l.checkoutId === b.checkoutId));
+}
+
+// 'event' (booked, items not yet collected) · 'active' (items out) · 'overdue'
+// · 'returned' (everything back, or nothing to return) · 'cancelled' · 'missed' (never collected)
+function eventState(b) {
+  if (b.status === 'cancelled') return 'cancelled';
+  if (b.status === 'collected') {
+    const loans = eventLoans(b);
+    const open = loans.filter((l) => l.status === 'open');
+    if (open.length === 0) return 'returned';
+    return open.some((l) => isOverdue(l)) ? 'overdue' : 'active';
+  }
+  if (b.endDate < todayStr()) return 'missed';
+  return 'event';
+}
+
+const STATE_LABEL = {
+  event: 'Booked',
+  active: 'Items out',
+  overdue: 'Overdue',
+  returned: 'Completed',
+  cancelled: 'Cancelled',
+  missed: 'Not collected',
+};
+
+function eventStatusHtml(b) {
+  const state = eventState(b);
+  let label = STATE_LABEL[state];
+  if (state === 'event') label = b.startDate <= todayStr() ? 'On now' : 'Upcoming';
+  return (
+    `<span class="status-pill s-${state}">${escapeHtml(label)}</span>` +
+    (b.clashesAccepted && b.status === 'booked' ? ' <span class="status-pill s-overdue" title="Booked over the available stock by an admin / Store Manager">Over capacity</span>' : '')
+  );
+}
+
+function canEditEvent(b) {
+  return b.status === 'booked' && (ownsBooking(b) || isAdminUnlocked());
+}
+
+function linesSummary(lines) {
+  return (lines || []).map((l) => `${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${l.quantity}`).join(', ');
+}
+
+// ---------- Events list ----------
+
+let eventsFilter = 'upcoming';
+
+function filteredEvents() {
+  const today = todayStr();
+  const term = el('events-search').value.trim().toLowerCase();
+  const me = session ? session.user.email : null;
+  let list = allBookings.filter((b) => {
+    if (eventsFilter === 'upcoming' && !(b.status !== 'cancelled' && b.endDate >= today)) return false;
+    if (eventsFilter === 'past' && !(b.status !== 'cancelled' && b.endDate < today)) return false;
+    if (eventsFilter === 'cancelled' && b.status !== 'cancelled') return false;
+    if (eventsFilter === 'mine' && !(me && b.email === me)) return false;
+    if (!term) return true;
+    return [b.event, b.category, b.venue, b.organiser, b.department, b.name, linesSummary(b.lines)].some((v) => String(v || '').toLowerCase().includes(term));
+  });
+  const upcomingFirst = eventsFilter === 'upcoming';
+  list = list.sort((a, b) => (upcomingFirst ? a.startDate.localeCompare(b.startDate) : b.startDate.localeCompare(a.startDate)));
+  return list;
+}
+
+const MONTH_SHORT = new Intl.DateTimeFormat('en-GB', { month: 'short' });
+
+function renderEventsList() {
+  document.querySelectorAll('#events-filters [data-events-filter]').forEach((chip) => {
+    const on = chip.dataset.eventsFilter === eventsFilter;
+    chip.classList.toggle('active', on);
+    chip.setAttribute('aria-pressed', String(on));
+  });
+  el('events-filters').querySelector('[data-events-filter="mine"]').hidden = !session;
+  const list = filteredEvents();
+  const empty = el('events-empty');
+  empty.hidden = list.length > 0;
+  if (!bookingsLoaded) empty.textContent = 'Loading events…';
+  else if (el('events-search').value.trim()) empty.textContent = 'No events match your search.';
+  else empty.textContent = eventsFilter === 'upcoming' ? 'No upcoming events yet. Press “Create Event” to plan one and reserve its items.' : 'Nothing here yet.';
+
+  el('events-list').innerHTML = list
+    .map((b) => {
+      const d = parseYmd(b.startDate);
+      return (
+        `<button type="button" class="event-card s-${eventState(b)}" data-event-id="${escapeHtml(b.id)}">` +
+        `<span class="event-date"><span class="event-day">${d ? d.getDate() : ''}</span><span class="event-month">${d ? escapeHtml(MONTH_SHORT.format(d)) : ''}</span></span>` +
+        `<span class="event-body">` +
+        `<span class="event-title">${escapeHtml(b.event)}</span>` +
+        `<span class="event-meta">${b.category ? `<span class="tag">${escapeHtml(b.category)}</span>` : ''}${eventStatusHtml(b)}</span>` +
+        `<span class="event-sub">${escapeHtml(fmtRange(b.startDate, b.endDate))}${b.venue ? ` · ${escapeHtml(b.venue)}` : ''} · ${escapeHtml(b.organiser || b.name)}</span>` +
+        `<span class="event-items">${(b.lines || []).length ? escapeHtml(linesSummary(b.lines)) : '<em>No items reserved yet</em>'}</span>` +
+        `</span></button>`
+      );
+    })
+    .join('');
+}
+
+el('events-list').addEventListener('click', (e) => {
+  const card = e.target.closest('[data-event-id]');
+  if (card) openEventDetail(card.dataset.eventId);
+});
+el('events-filters').addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-events-filter]');
+  if (!chip) return;
+  eventsFilter = chip.dataset.eventsFilter;
+  renderEventsList();
+});
+el('events-search').addEventListener('input', renderEventsList);
+el('create-event-btn').addEventListener('click', () => openEventForm({}));
+
+// ---------- Event detail ----------
+
+let shownEventId = null;
+
+function openEventDetail(id) {
+  shownEventId = id;
+  if (!renderEventDetail(id)) {
+    showToast('That event no longer exists.', 'error');
     return;
   }
-  openCart();
+  openModal('event-modal');
+  loadEventData().then(() => {
+    if (!el('event-modal').hidden && shownEventId === id) renderEventDetail(id);
+  });
+}
+
+function renderEventDetail(id) {
+  const b = allBookings.find((x) => x.id === id);
+  if (!b) return false;
+  el('ev-d-category').textContent = b.category || 'Event';
+  el('ev-d-status').innerHTML = eventStatusHtml(b);
+  el('ev-d-name').textContent = b.event;
+  el('ev-d-dates').textContent = fmtRange(b.startDate, b.endDate);
+  const info = [
+    ['Venue', b.venue],
+    ['Organiser', b.organiser],
+    ['Department', b.department],
+    ['Contact', b.contact],
+    ['Collect items on', fmtDate(b.startDate)],
+    ['Return items by', fmtDate(b.endDate)],
+    ['Booked by', `${b.name}${b.employeeNo ? ` (${b.employeeNo})` : ''}`],
+  ].filter(([, v]) => v);
+  el('ev-d-info').innerHTML = info.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('');
+  el('ev-d-description').textContent = [b.description, b.notes ? `Notes: ${b.notes}` : ''].filter(Boolean).join('\n\n');
+  el('ev-d-description').hidden = !b.description && !b.notes;
+
+  // Booked, collected and returned per item + design.
+  const loans = eventLoans(b);
+  const collected = b.collectedLines || [];
+  const key = (l) => `${l.itemId}|${l.variationId || ''}`;
+  const keys = [...new Set((b.lines || []).map(key).concat(collected.map(key)))];
+  const rows = keys.map((k) => {
+    const booked = (b.lines || []).find((l) => key(l) === k);
+    const took = collected.find((l) => key(l) === k);
+    const ref = booked || took;
+    const itemLoans = loans.filter((l) => key(l) === k);
+    const returned = itemLoans.reduce((sum, l) => sum + l.quantityReturned, 0);
+    const item = items.find((i) => i.id === ref.itemId);
+    const loanable = item ? item.returnable : itemLoans.length > 0;
+    let back = '—';
+    if (b.status === 'collected' && took) back = loanable ? `${returned} of ${took.quantity}` : 'Used';
+    return (
+      `<tr><td><strong>${escapeHtml(ref.itemName)}</strong>${ref.itemCode ? ` <span class="item-code">${escapeHtml(ref.itemCode)}</span>` : ''}</td>` +
+      `<td>${escapeHtml(ref.variationName || '—')}</td>` +
+      `<td>${booked ? booked.quantity : '—'}</td>` +
+      `<td>${took ? took.quantity : b.status === 'collected' ? '0' : '—'}</td>` +
+      `<td>${escapeHtml(back)}</td></tr>`
+    );
+  });
+  el('ev-d-lines').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5" class="muted-cell">No items reserved yet.</td></tr>';
+
+  const state = eventState(b);
+  const open = loans.filter((l) => l.status === 'open');
+  let collection = '';
+  if (b.status === 'collected') {
+    collection =
+      `Collected ${fmtDateTime(b.collectedAt)}${b.collectedBy ? ` by ${b.collectedBy}` : ''}. ` +
+      (open.length
+        ? `${open.reduce((s, l) => s + loanOutstanding(l), 0)} still to be returned (due ${fmtDate(b.endDate)})${state === 'overdue' ? ' — overdue' : ''}.`
+        : 'Everything has been returned.');
+  } else if (b.status === 'booked') {
+    collection = (b.lines || []).length
+      ? `Items reserved — collect them on ${fmtDate(b.startDate)} with “Move out”, and return them by ${fmtDate(b.endDate)}.`
+      : 'No items reserved yet — use Edit to add the items this event needs.';
+  } else if (b.status === 'cancelled') {
+    collection = `Cancelled ${fmtDateTime(b.cancelledAt)}. Its items are free for other events.`;
+  }
+  el('ev-d-collection').textContent = collection;
+
+  const actions = [];
+  const live = b.status === 'booked' && b.endDate >= todayStr();
+  if (live && (b.lines || []).length) actions.push(`<button type="button" class="primary-btn" data-ev-action="collect">${icon('cart')} Move out (collect)</button>`);
+  if (open.length) actions.push(`<button type="button" class="ghost-btn sky-btn" data-ev-action="return">${icon('return')} Return items</button>`);
+  if (canEditEvent(b)) actions.push(`<button type="button" class="ghost-btn" data-ev-action="edit">${icon('pencil')} Edit</button>`);
+  actions.push(`<button type="button" class="ghost-btn" data-ev-action="duplicate">${icon('plus')} Duplicate</button>`);
+  if (canEditEvent(b)) actions.push(`<button type="button" class="ghost-btn danger-text" data-ev-action="cancel">Cancel event</button>`);
+  if (isAdminUnlocked()) actions.push(`<button type="button" class="icon-btn danger-text" data-ev-action="delete" aria-label="Delete this event record" title="Delete this event record">${icon('trash')}</button>`);
+  el('ev-d-actions').innerHTML = actions.join('');
+
+  const history = (b.history || []).slice().reverse();
+  el('ev-d-history').innerHTML = history.length
+    ? history
+        .map(
+          (h) =>
+            `<li><span class="muted-text">${escapeHtml(fmtDateTime(h.at))}</span> <strong>${escapeHtml(h.action[0].toUpperCase() + h.action.slice(1))}</strong>` +
+            `${h.by ? ` by ${escapeHtml(h.by)}` : ''}${h.detail ? ` — ${escapeHtml(h.detail)}` : ''}</li>`
+        )
+        .join('')
+    : `<li class="muted-text">Booked ${escapeHtml(fmtDateTime(b.createdAt))} by ${escapeHtml(b.name)}.</li>`;
+  return true;
+}
+
+el('ev-d-actions').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-ev-action]');
+  const b = btn && allBookings.find((x) => x.id === shownEventId);
+  if (!b) return;
+  const action = btn.dataset.evAction;
+  if (action === 'collect') {
+    closeModal('event-modal');
+    collectBooking(b);
+  } else if (action === 'return') {
+    const open = eventLoans(b).filter((l) => l.status === 'open');
+    openReturnModal(open, { origin: 'event', checkAll: true });
+  } else if (action === 'edit') {
+    openEventForm({ booking: b });
+  } else if (action === 'duplicate') {
+    openEventForm({ duplicateOf: b });
+  } else if (action === 'cancel') {
+    await cancelBooking(b, btn);
+  } else if (action === 'delete') {
+    requireAdminThen(() => deleteBooking(b));
+  }
+});
+
+// ---------- Event form: create, edit, duplicate ----------
+
+PERSON_FIELDS.push({ name: 'ev-person-name', employeeNo: 'ev-person-no', note: 'event-person-note' });
+
+let eventFormMode = { kind: 'create' };
+let eventLines = [];
+let eventClashAck = null;
+
+function setEventCategoryOptions(selected) {
+  const options = EVENT_CATEGORIES.includes(selected) || !selected ? EVENT_CATEGORIES : EVENT_CATEGORIES.concat([selected]);
+  el('ev-category').innerHTML =
+    `<option value="">Choose…</option>` + options.map((c) => `<option value="${escapeHtml(c)}"${c === selected ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('');
+}
+
+function fillAddItemPicker() {
+  const byCategory = {};
+  activeItems()
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .forEach((i) => (byCategory[i.category] = byCategory[i.category] || []).push(i));
+  el('ev-add-item').innerHTML =
+    `<option value="">Add an item…</option>` +
+    Object.keys(byCategory)
+      .sort()
+      .map(
+        (cat) =>
+          `<optgroup label="${escapeHtml(cat)}">` +
+          byCategory[cat].map((i) => `<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)}${i.code ? ` (${escapeHtml(i.code)})` : ''}</option>`).join('') +
+          `</optgroup>`
+      )
+      .join('');
+}
+
+// options: { booking } edit · { duplicateOf } copy · { lines, fromCart, event } from the cart · {} new
+function openEventForm(options = {}) {
+  const source = options.booking || options.duplicateOf || null;
+  eventFormMode = options.booking ? { kind: 'edit', id: options.booking.id } : { kind: 'create', fromCart: Boolean(options.fromCart) };
+  el('event-form-title').textContent = options.booking ? `Edit ${options.booking.event}` : options.duplicateOf ? `Duplicate ${options.duplicateOf.event}` : 'Create Event';
+  el('ev-name').value = source ? source.event : options.event || '';
+  setEventCategoryOptions(source ? source.category || '' : '');
+  el('ev-venue').value = source ? source.venue || '' : '';
+  el('ev-organiser').value = source ? source.organiser || '' : session ? session.user.name : '';
+  el('ev-department').value = source ? source.department || '' : '';
+  el('ev-contact').value = source ? source.contact || '' : session ? session.user.email : '';
+  el('ev-description').value = source ? source.description || '' : '';
+  el('ev-notes').value = source ? source.notes || '' : '';
+  // A copy is for a new date: the dates are left for the person to pick.
+  el('ev-start').value = options.booking ? options.booking.startDate : '';
+  el('ev-end').value = options.booking ? options.booking.endDate : '';
+  el('ev-start').min = options.booking && options.booking.startDate < todayStr() ? options.booking.startDate : todayStr();
+  el('ev-end').min = el('ev-start').value || el('ev-start').min;
+  const lines = source ? source.lines || [] : options.lines || [];
+  eventLines = lines
+    .filter((l) => items.some((i) => i.id === l.itemId && (!i.archived || options.booking)))
+    .map((l) => ({ itemId: l.itemId, variationId: l.variationId || null, quantity: l.quantity }));
+  eventClashAck = null;
+  el('ev-clashes').hidden = true;
+  el('ev-person-row').hidden = Boolean(options.booking);
+  el('ev-submit').innerHTML = `${icon('calendar')} ${options.booking ? 'Save changes' : 'Book event'}`;
+  fillAddItemPicker();
+  setFormError('event-form-error', '');
+  syncPersonFields();
+  if (options.booking) {
+    // Editing keeps the person who booked it; no "who are you" boxes.
+    el('event-person-note').hidden = true;
+    el('ev-person-row').hidden = true;
+    el('ev-person-name').disabled = true;
+    el('ev-person-no').disabled = true;
+  }
+  renderEventLines();
+  openModal('event-form-modal');
+  loadEventData().then(() => !el('event-form-modal').hidden && renderEventLines());
+}
+
+// How many of an item are free on these dates, before this form's own lines.
+// Mirrors the server's rule (the server checks again when saving).
+function freeOnDates(item, start, end, excludeId) {
+  const today = todayStr();
+  const booked = allBookings
+    .filter((b) => b.id !== excludeId && b.status === 'booked' && b.endDate >= today && bookingQty(b, item.id) > 0)
+    .filter((b) => !item.returnable || (b.startDate <= end && b.endDate >= start))
+    .reduce((sum, b) => sum + bookingQty(b, item.id), 0);
+  let out = 0;
+  if (item.returnable) {
+    allLoans.forEach((l) => {
+      if (l.itemId !== item.id || l.status !== 'open') return;
+      const due = l.expectedReturnDate || '';
+      if (due && due >= today && due < start) return;
+      out += loanOutstanding(l);
+    });
+  }
+  return Math.max(0, item.quantity - out - booked);
+}
+
+function renderEventLines() {
+  const start = el('ev-start').value;
+  const end = el('ev-end').value || start;
+  const excludeId = eventFormMode.kind === 'edit' ? eventFormMode.id : null;
+  const totals = {};
+  eventLines.forEach((l) => (totals[l.itemId] = (totals[l.itemId] || 0) + (Number(l.quantity) || 0)));
+  el('ev-lines').innerHTML = eventLines.length
+    ? eventLines
+        .map((l, i) => {
+          const item = items.find((x) => x.id === l.itemId);
+          if (!item) return '';
+          const designs = activeVariations(item);
+          const free = start ? freeOnDates(item, start, end, excludeId) : null;
+          const short = free !== null && totals[item.id] > free;
+          const hint =
+            free === null
+              ? `${item.quantity} ${escapeHtml(item.unit || 'pcs')} in the store — pick the dates to check availability`
+              : `${free} of ${item.quantity} free on these dates`;
+          return (
+            `<li class="ev-line${short ? ' is-short' : ''}">` +
+            `<div class="ev-line-info"><strong>${escapeHtml(item.name)}</strong>${item.code ? ` <span class="item-code">${escapeHtml(item.code)}</span>` : ''}` +
+            `<span class="ev-line-hint">${hint}${short ? ` — you have ${totals[item.id]}` : ''}</span></div>` +
+            (designs.length
+              ? `<select data-ev-design="${i}" aria-label="Design of ${escapeHtml(item.name)}" class="${l.variationId ? '' : 'needs-choice'}"><option value="">Choose design…</option>` +
+                designs.map((v) => `<option value="${escapeHtml(v.id)}"${v.id === l.variationId ? ' selected' : ''}>${escapeHtml(v.name)}</option>`).join('') +
+                `</select>`
+              : '<span class="ev-line-nodesign"></span>') +
+            `<input type="number" inputmode="numeric" min="1" max="${item.quantity}" step="1" value="${Number(l.quantity) || 1}" data-ev-qty="${i}" aria-label="Quantity of ${escapeHtml(item.name)}" />` +
+            `<button type="button" class="icon-btn danger-text" data-ev-remove="${i}" aria-label="Remove ${escapeHtml(item.name)}" title="Remove">${icon('trash')}</button>` +
+            `</li>`
+          );
+        })
+        .join('')
+    : `<li class="muted-text">No items yet. You can book the event now and add items later.</li>`;
+}
+
+function resetEventClash() {
+  if (!eventClashAck && el('ev-clashes').hidden) return;
+  eventClashAck = null;
+  el('ev-clashes').hidden = true;
+  el('ev-submit').innerHTML = `${icon('calendar')} ${eventFormMode.kind === 'edit' ? 'Save changes' : 'Book event'}`;
+}
+
+el('ev-add-btn').addEventListener('click', () => {
+  const id = el('ev-add-item').value;
+  if (!id) {
+    el('ev-add-item').focus();
+    return;
+  }
+  const item = items.find((i) => i.id === id);
+  const designs = item ? activeVariations(item) : [];
+  const existing = !designs.length && eventLines.find((l) => l.itemId === id);
+  if (existing) existing.quantity = Number(existing.quantity || 0) + 1;
+  else eventLines.push({ itemId: id, variationId: null, quantity: 1 });
+  el('ev-add-item').value = '';
+  resetEventClash();
+  renderEventLines();
+});
+el('ev-lines').addEventListener('change', (e) => {
+  if (e.target.dataset.evDesign !== undefined) eventLines[Number(e.target.dataset.evDesign)].variationId = e.target.value || null;
+  if (e.target.dataset.evQty !== undefined) eventLines[Number(e.target.dataset.evQty)].quantity = Math.max(1, Math.round(Number(e.target.value)) || 1);
+  resetEventClash();
+  renderEventLines();
+});
+el('ev-lines').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-ev-remove]');
+  if (!btn) return;
+  eventLines.splice(Number(btn.dataset.evRemove), 1);
+  resetEventClash();
+  renderEventLines();
+});
+el('event-form').addEventListener('input', (e) => {
+  if (e.target.id === 'ev-start') {
+    if (el('ev-end').value && el('ev-end').value < e.target.value) el('ev-end').value = e.target.value;
+    el('ev-end').min = e.target.value || todayStr();
+  }
+  if (e.target.id === 'ev-start' || e.target.id === 'ev-end') renderEventLines();
+  if (!e.target.closest('#ev-lines')) resetEventClash();
+});
+
+function showEventClashes(clashes, canOverride) {
+  const box = el('ev-clashes');
+  box.innerHTML =
+    `<p class="clash-title">${icon('alert')}<strong>Not enough available for these dates — nothing was booked</strong></p><ul>` +
+    clashes
+      .map((c) => {
+        const why = c.conflicts.map((x) => `${x.quantity} booked for “${x.event}” (${fmtRange(x.startDate, x.endDate)}, ${x.name})`);
+        if (c.out) why.push(`${c.out} out on loan and not due back before then`);
+        return (
+          `<li><strong>${escapeHtml(c.itemName)}</strong>: you asked for ${c.wanted}, only ${c.available} available — short by ${c.wanted - c.available}` +
+          `${why.length ? `<br><span class="muted-text">${escapeHtml(why.join('; '))}</span>` : ''}</li>`
+        );
+      })
+      .join('') +
+    `</ul><p>${
+      canOverride
+        ? 'Lower the quantity, remove the item or pick other dates. As an admin / Store Manager you can still press <strong>Book anyway</strong> if it has been agreed (it is logged).'
+        : 'Lower the quantity, remove the item or pick other dates. If you need more, ask an admin or Store Manager.'
+    }</p>`;
+  box.hidden = false;
+  box.scrollIntoView({ block: 'nearest' });
+}
+
+el('event-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  withBusy(el('ev-submit'), async () => {
+    setFormError('event-form-error', '');
+    const needsDesign = eventLines.find((l) => {
+      const item = items.find((i) => i.id === l.itemId);
+      return item && activeVariations(item).length && !l.variationId;
+    });
+    if (needsDesign) {
+      setFormError('event-form-error', `Choose a design for “${items.find((i) => i.id === needsDesign.itemId).name}”.`);
+      return;
+    }
+    const editing = eventFormMode.kind === 'edit';
+    const body = {
+      event: el('ev-name').value,
+      category: el('ev-category').value,
+      venue: el('ev-venue').value,
+      startDate: el('ev-start').value,
+      endDate: el('ev-end').value || el('ev-start').value,
+      organiser: el('ev-organiser').value,
+      department: el('ev-department').value,
+      contact: el('ev-contact').value,
+      description: el('ev-description').value,
+      notes: el('ev-notes').value,
+      lines: eventLines.map((l) => ({ itemId: l.itemId, variationId: l.variationId || undefined, quantity: Number(l.quantity) || 1 })),
+    };
+    if (!editing) Object.assign(body, personFrom('ev-person-name', 'ev-person-no'));
+    const key = JSON.stringify(body);
+    const res = await request(editing ? `${API.bookings}?id=${encodeURIComponent(eventFormMode.id)}` : API.bookings, {
+      method: editing ? 'PUT' : 'POST',
+      body: { ...body, acceptClashes: eventClashAck === key },
+    });
+    if (!res.ok) {
+      if (res.status === 409 && res.data.code === 'clash') {
+        eventClashAck = res.data.canOverride ? key : null;
+        showEventClashes(res.data.clashes || [], Boolean(res.data.canOverride));
+        if (eventClashAck) el('ev-submit').innerHTML = `${icon('calendar')} Book anyway`;
+        return;
+      }
+      setFormError('event-form-error', res.status === 0 ? 'Could not reach the store server — nothing was saved. Please try again.' : res.error);
+      return;
+    }
+    if (!editing) rememberPerson(body);
+    const saved = res.data.booking;
+    if (eventFormMode.fromCart) {
+      cart = [];
+      cartBookingId = null;
+      saveCart();
+      renderGrid();
+    }
+    closeModal('event-form-modal');
+    await loadEventData();
+    showToast(
+      editing ? 'Event updated.' : saved.lines.length ? `“${saved.event}” booked — its items are reserved.` : `“${saved.event}” added to the calendar.`,
+      'success'
+    );
+    refreshEventViews();
+    openEventDetail(saved.id);
+  });
+});
+
+// ---------- Calendar ----------
+
+let calMode = 'month';
+let calAnchor = todayStr();
+let calFilter = 'all';
+
+const CAL_MONTH = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric' });
+const CAL_WEEKDAY = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
+
+function ymdOf(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function addDays(ymd, n) {
+  const d = parseYmd(ymd);
+  d.setDate(d.getDate() + n);
+  return ymdOf(d);
+}
+
+function isoDay(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : ymdOf(d);
+}
+
+// Everything the calendar can show, as { kind, start, end, title, sub, state, ref, mine }.
+function calendarEntries() {
+  const me = session ? session.user.email : null;
+  const today = todayStr();
+  const out = [];
+  allBookings.forEach((b) => {
+    const state = eventState(b);
+    out.push({
+      kind: 'event',
+      start: b.startDate,
+      end: b.endDate,
+      title: b.event,
+      sub: [b.venue, b.organiser || b.name].filter(Boolean).join(' · '),
+      detail: linesSummary(b.lines),
+      state: state === 'missed' ? 'cancelled' : state,
+      ref: b.id,
+      hasItems: (b.lines || []).length > 0,
+      mine: Boolean(me && b.email === me),
+    });
+  });
+  // Walk-in move-outs of loanable items (not from an event), one entry per checkout.
+  const groups = new Map();
+  allLoans.forEach((l) => {
+    if (l.bookingId) return;
+    const key = l.checkoutId || l.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  });
+  groups.forEach((loans, key) => {
+    const first = loans[0];
+    const open = loans.filter((l) => l.status === 'open');
+    const mine = Boolean(me && first.email === me);
+    if (open.length) {
+      const due = open.map((l) => l.expectedReturnDate || today).sort().slice(-1)[0];
+      out.push({
+        kind: 'loan',
+        start: isoDay(first.loanedAt) || today,
+        end: due < isoDay(first.loanedAt) ? isoDay(first.loanedAt) : due,
+        title: first.purpose || 'Borrowed',
+        sub: first.name,
+        detail: open.map((l) => `${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${loanOutstanding(l)}`).join(', '),
+        state: open.some((l) => isOverdue(l)) ? 'overdue' : 'active',
+        ref: key,
+        purpose: first.purpose,
+        mine,
+      });
+    }
+    const byDay = new Map();
+    loans.forEach((l) =>
+      (l.returns || []).forEach((r) => {
+        if (r.adjustment) return;
+        const day = isoDay(r.returnedAt);
+        if (!byDay.has(day)) byDay.set(day, []);
+        byDay.get(day).push(`${l.itemName} × ${r.quantity}`);
+      })
+    );
+    byDay.forEach((what, day) =>
+      out.push({ kind: 'return', start: day, end: day, title: `Returned: ${first.purpose || 'items'}`, sub: first.name, detail: what.join(', '), state: 'returned', ref: key, purpose: first.purpose, mine })
+    );
+  });
+  // Returns for event items show on the day they came back.
+  allBookings.forEach((b) => {
+    if (b.status !== 'collected') return;
+    const byDay = new Map();
+    eventLoans(b).forEach((l) =>
+      (l.returns || []).forEach((r) => {
+        if (r.adjustment) return;
+        const day = isoDay(r.returnedAt);
+        if (!byDay.has(day)) byDay.set(day, []);
+        byDay.get(day).push(`${l.itemName} × ${r.quantity}`);
+      })
+    );
+    byDay.forEach((what, day) =>
+      out.push({ kind: 'return', start: day, end: day, title: `Returned: ${b.event}`, sub: b.name, detail: what.join(', '), state: 'returned', ref: b.id, event: true, mine: Boolean(me && b.email === me) })
+    );
+  });
+  return out.filter((e) => e.start && e.end).filter(calFilterMatch).sort((a, b) => a.start.localeCompare(b.start) || a.title.localeCompare(b.title));
+}
+
+function calFilterMatch(e) {
+  switch (calFilter) {
+    case 'events':
+      return e.kind === 'event';
+    case 'bookings':
+      return e.kind === 'event' && e.hasItems && e.state !== 'cancelled';
+    case 'borrowings':
+      return (e.kind === 'loan' || e.kind === 'event') && (e.state === 'active' || e.state === 'overdue');
+    case 'returns':
+      return e.kind === 'return';
+    case 'mine':
+      return e.mine;
+    default:
+      return true;
+  }
+}
+
+function entryButton(e, { long = false } = {}) {
+  const label = long
+    ? `<strong>${escapeHtml(e.title)}</strong><span class="cal-entry-sub">${escapeHtml(e.kind === 'event' ? fmtRange(e.start, e.end) : e.kind === 'loan' ? `Out ${fmtRange(e.start, e.end)}` : fmtDate(e.start))}${e.sub ? ` · ${escapeHtml(e.sub)}` : ''}</span>${e.detail ? `<span class="cal-entry-sub">${escapeHtml(e.detail)}</span>` : ''}`
+    : escapeHtml(e.title);
+  return (
+    `<button type="button" class="cal-entry s-${e.state}${long ? ' is-long' : ''}" data-cal-kind="${e.kind}" data-cal-ref="${escapeHtml(e.ref)}"` +
+    `${e.event ? ' data-cal-event="1"' : ''} data-cal-purpose="${escapeHtml(e.purpose || '')}" title="${escapeHtml(`${e.title}${e.sub ? ` — ${e.sub}` : ''}${e.detail ? `\n${e.detail}` : ''}`)}">${label}</button>`
+  );
+}
+
+function renderCalendar() {
+  document.querySelectorAll('#cal-modes [data-cal-mode]').forEach((b) => {
+    const on = b.dataset.calMode === calMode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  document.querySelectorAll('#cal-filters [data-cal-filter]').forEach((b) => {
+    const on = b.dataset.calFilter === calFilter;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  el('cal-filters').querySelector('[data-cal-filter="mine"]').hidden = !session;
+  const entries = calendarEntries();
+  const onDay = (day) => entries.filter((e) => e.start <= day && e.end >= day);
+  const today = todayStr();
+  const anchor = parseYmd(calAnchor);
+  const body = el('cal-body');
+
+  if (calMode === 'month') {
+    el('cal-title').textContent = CAL_MONTH.format(anchor);
+    const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    const startOffset = (first.getDay() + 6) % 7; // weeks start on Monday
+    const gridStart = ymdOf(new Date(first.getFullYear(), first.getMonth(), 1 - startOffset));
+    let html = '<div class="cal-month"><div class="cal-weekdays">' + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<span>${d}</span>`).join('') + '</div><div class="cal-grid">';
+    for (let i = 0; i < 42; i++) {
+      const day = addDays(gridStart, i);
+      const d = parseYmd(day);
+      const list = onDay(day);
+      const outside = d.getMonth() !== anchor.getMonth();
+      html +=
+        `<div class="cal-cell${outside ? ' is-outside' : ''}${day === today ? ' is-today' : ''}">` +
+        `<button type="button" class="cal-daynum" data-cal-day="${day}" aria-label="${escapeHtml(fmtDate(day))}: ${plural(list.length, 'entry', 'entries')}">${d.getDate()}</button>` +
+        list.slice(0, 3).map((e) => entryButton(e)).join('') +
+        (list.length > 3 ? `<button type="button" class="cal-more" data-cal-day="${day}">+${list.length - 3} more</button>` : '') +
+        `</div>`;
+    }
+    body.innerHTML = html + '</div></div>';
+  } else if (calMode === 'week') {
+    const offset = (anchor.getDay() + 6) % 7;
+    const weekStart = addDays(calAnchor, -offset);
+    el('cal-title').textContent = `Week of ${fmtDate(weekStart)}`;
+    let html = '<div class="cal-week">';
+    for (let i = 0; i < 7; i++) {
+      const day = addDays(weekStart, i);
+      const list = onDay(day);
+      html +=
+        `<div class="cal-week-day${day === today ? ' is-today' : ''}"><button type="button" class="cal-week-head" data-cal-day="${day}">${escapeHtml(CAL_WEEKDAY.format(parseYmd(day)))} <strong>${parseYmd(day).getDate()}</strong></button>` +
+        (list.length ? list.map((e) => entryButton(e)).join('') : '<span class="muted-text cal-none">—</span>') +
+        `</div>`;
+    }
+    body.innerHTML = html + '</div>';
+  } else if (calMode === 'day') {
+    el('cal-title').textContent = `${CAL_WEEKDAY.format(anchor)}, ${fmtDate(calAnchor)}`;
+    const list = onDay(calAnchor);
+    body.innerHTML = list.length
+      ? `<div class="cal-list">${list.map((e) => entryButton(e, { long: true })).join('')}</div>`
+      : '<p class="empty-state">Nothing on this day.</p>';
+  } else {
+    const until = addDays(calAnchor, 60);
+    el('cal-title').textContent = `${fmtDate(calAnchor)} – ${fmtDate(until)}`;
+    const list = entries.filter((e) => e.end >= calAnchor && e.start <= until);
+    const byDay = new Map();
+    list.forEach((e) => {
+      const day = e.start < calAnchor ? calAnchor : e.start;
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(e);
+    });
+    const days = [...byDay.keys()].sort();
+    body.innerHTML = days.length
+      ? `<div class="cal-agenda">${days
+          .map(
+            (day) =>
+              `<section><h3 class="cal-agenda-day${day === today ? ' is-today' : ''}">${escapeHtml(CAL_WEEKDAY.format(parseYmd(day)))}, ${escapeHtml(fmtDate(day))}</h3>` +
+              `<div class="cal-list">${byDay.get(day).map((e) => entryButton(e, { long: true })).join('')}</div></section>`
+          )
+          .join('')}</div>`
+      : '<p class="empty-state">Nothing in the next 60 days.</p>';
+  }
+}
+
+function moveCalendar(step) {
+  const d = parseYmd(calAnchor);
+  if (calMode === 'month') d.setMonth(d.getMonth() + step, 1);
+  else if (calMode === 'week') d.setDate(d.getDate() + 7 * step);
+  else if (calMode === 'day') d.setDate(d.getDate() + step);
+  else d.setDate(d.getDate() + 30 * step);
+  calAnchor = ymdOf(d);
+  renderCalendar();
+}
+
+el('cal-prev').addEventListener('click', () => moveCalendar(-1));
+el('cal-next').addEventListener('click', () => moveCalendar(1));
+el('cal-today').addEventListener('click', () => {
+  calAnchor = todayStr();
+  renderCalendar();
+});
+el('cal-modes').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-cal-mode]');
+  if (!b) return;
+  calMode = b.dataset.calMode;
+  renderCalendar();
+});
+el('cal-filters').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-cal-filter]');
+  if (!b) return;
+  calFilter = b.dataset.calFilter;
+  renderCalendar();
+});
+el('cal-body').addEventListener('click', (e) => {
+  const day = e.target.closest('[data-cal-day]');
+  if (day) {
+    calAnchor = day.dataset.calDay;
+    calMode = 'day';
+    renderCalendar();
+    return;
+  }
+  const entry = e.target.closest('[data-cal-ref]');
+  if (!entry) return;
+  if (entry.dataset.calKind === 'event' || entry.dataset.calEvent) {
+    openEventDetail(entry.dataset.calRef);
+    return;
+  }
+  // A walk-in loan or return: open Loans & Returns on it.
+  loansSearch = entry.dataset.calPurpose || '';
+  el('loans-search').value = loansSearch;
+  openLoansPanel(entry.dataset.calKind === 'return' ? 'all' : 'open');
 });
 
 el('loans-search').addEventListener('input', (e) => {

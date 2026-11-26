@@ -75,17 +75,20 @@ function availabilityFor(item, { start, end, excludeId, bookings, loans, today }
 
 // Lines that want more than is available: [{ itemId, itemName, wanted, available, out, conflicts }]
 function findClashes(lines, { start, end, excludeId, items, bookings, loans, today }) {
+  // Designs of one item share its stock, so add them up per item first.
+  const wanted = new Map();
+  for (const line of lines) wanted.set(line.itemId, (wanted.get(line.itemId) || 0) + (line.quantity || 0));
   const clashes = [];
-  for (const line of lines) {
-    const item = items.find((i) => i.id === line.itemId);
+  for (const [itemId, quantity] of wanted) {
+    const item = items.find((i) => i.id === itemId);
     if (!item) continue;
     const a = availabilityFor(item, { start, end, excludeId, bookings, loans, today });
-    if (line.quantity > a.available) {
+    if (quantity > a.available) {
       clashes.push({
         itemId: item.id,
         itemName: item.name,
         returnable: Boolean(item.returnable),
-        wanted: line.quantity,
+        wanted: quantity,
         available: Math.max(0, a.available),
         total: a.total,
         out: a.out,

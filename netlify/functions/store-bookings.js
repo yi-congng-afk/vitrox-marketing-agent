@@ -1,10 +1,23 @@
-const { getItems, getLoans, getBookings, saveBookings, genId } = require('./_shared/store-blobs');
+const { getItems, getLoans, getBookings, updateBookings, genId } = require('./_shared/store-blobs');
 const { checkAccess, recordedBy, isManager } = require('./_shared/store-access');
 const { audit } = require('./_shared/audit');
 const { MAX_DAYS, MAX_AHEAD_DAYS, malaysiaToday, validDate, daysBetween, findClashes } = require('./_shared/bookings');
 
-const MAX_EVENT = 120;
-const MAX_NOTES = 500;
+// Event bookings. An event has its details (name, category, dates, venue,
+// organiser…) and the items reserved for it. Its start date is when the items
+// are collected and its end date is when they are due back.
+//
+// GET                 — every event (optionally ?itemId=)
+// POST                — create an event { event, category, startDate, endDate, venue, organiser,
+//                       department, contact, description, notes, lines:[{ itemId, variationId?, quantity }],
+//                       acceptClashes }  (name/employeeNo too when not signed in)
+// PUT ?id=            — change an event that has not been collected yet (same fields)
+// PATCH ?id=          — { status: 'cancelled' }
+// DELETE ?id=         — admin / Store Manager: remove the record entirely
+// Not enough stock → 409 { code: 'clash', clashes, canOverride }; only an
+// admin or Store Manager may override with acceptClashes (logged).
+
+const LIMITS = { event: 120, category: 40, venue: 120, organiser: 80, department: 80, contact: 120, description: 1000, notes: 500 };
 const MAX_LINES = 50;
 
 function json(statusCode, payload) {
@@ -20,13 +33,106 @@ function parseBody(event) {
   }
 }
 
+const tidy = (value, max) => String(value === undefined || value === null ? '' : value).trim().replace(/[ \t]+/g, ' ').slice(0, max + 1);
 const describe = (b) => `"${b.event}" (${b.startDate}${b.endDate !== b.startDate ? ` to ${b.endDate}` : ''}) by ${b.name}`;
 
-// GET                 — every booking (optionally ?itemId=)
-// POST                — book items { event, startDate, endDate, lines, notes, name, employeeNo, acceptClashes }
-//                       409 { code: 'clash', clashes } unless acceptClashes is true
-// PATCH ?id=          — { status: 'cancelled' } by the person who booked it, or an admin
-// DELETE ?id=         — admin: remove a booking record entirely
+// Checks an event's details and items. Returns { fields, lines } or { error }.
+function readEventInput(body, items, { existing, today }) {
+  const fields = {};
+  for (const key of Object.keys(LIMITS)) {
+    const value = tidy(body[key] !== undefined ? body[key] : existing ? existing[key] : '', LIMITS[key]);
+    if (value.length > LIMITS[key]) return { error: `${key[0].toUpperCase()}${key.slice(1)} is too long (${LIMITS[key]} characters at most)` };
+    fields[key] = value;
+  }
+  if (!fields.event) return { error: 'Enter the event name' };
+  if (!fields.category) return { error: 'Choose the event category' };
+  if (!fields.venue) return { error: 'Enter the venue / location' };
+  if (!fields.organiser) return { error: 'Enter the organiser' };
+
+  const start = String(body.startDate !== undefined ? body.startDate : existing ? existing.startDate : '').trim();
+  // A change that leaves out the end date keeps the one the event already has.
+  const end = String(
+    body.endDate !== undefined && body.endDate !== '' ? body.endDate : existing && body.startDate === undefined ? existing.endDate : start
+  ).trim();
+  if (!validDate(start)) return { error: 'Pick the event start date (the day the items are collected)' };
+  if (!validDate(end)) return { error: 'Pick the event end date (the day the items are due back)' };
+  if (start < today && !(existing && existing.startDate === start)) return { error: 'The start date has already passed' };
+  if (end < start) return { error: 'The end date is before the start date' };
+  if (daysBetween(start, end) > MAX_DAYS) return { error: `An event booking can cover ${MAX_DAYS} days at most` };
+  if (daysBetween(today, start) > MAX_AHEAD_DAYS) return { error: 'That is too far ahead — book within the next two years' };
+  fields.startDate = start;
+  fields.endDate = end;
+
+  const rawLines = body.lines !== undefined ? body.lines : existing ? existing.lines : [];
+  if (!Array.isArray(rawLines)) return { error: 'Items must be a list' };
+  if (rawLines.length > MAX_LINES) return { error: `${MAX_LINES} lines at most per event` };
+  const merged = new Map();
+  const problems = [];
+  for (const raw of rawLines) {
+    const qty = Math.round(Number(raw && raw.quantity));
+    if (!raw || !raw.itemId || !qty || qty <= 0) return { error: 'Every item line needs an item and a quantity of at least 1' };
+    const item = items.find((i) => i.id === raw.itemId);
+    if (!item) {
+      problems.push('An item in the list no longer exists — remove it and try again');
+      continue;
+    }
+    const keptFromBefore = existing && (existing.lines || []).some((l) => l.itemId === item.id);
+    if (item.archived && !keptFromBefore) {
+      problems.push(`"${item.name}" has been archived and can no longer be booked`);
+      continue;
+    }
+    const designs = item.hasVariations ? (item.variations || []).filter((v) => v.active) : [];
+    let variation = null;
+    if (designs.length) {
+      variation = designs.find((v) => v.id === raw.variationId) || null;
+      if (!variation) {
+        problems.push(raw.variationId ? `"${item.name}": that design is no longer available — choose another` : `"${item.name}": choose a design`);
+        continue;
+      }
+    }
+    const key = `${item.id}|${variation ? variation.id : ''}`;
+    const line = merged.get(key) || {
+      itemId: item.id,
+      itemName: item.name,
+      itemCode: item.code || '',
+      variationId: variation ? variation.id : null,
+      variationName: variation ? variation.name : null,
+      variationCode: variation ? variation.code : null,
+      quantity: 0,
+      returnable: Boolean(item.returnable),
+    };
+    line.quantity += qty;
+    merged.set(key, line);
+  }
+  if (problems.length) return { error: problems.join('; ') };
+  const lines = [...merged.values()];
+  const totals = new Map();
+  lines.forEach((l) => totals.set(l.itemId, (totals.get(l.itemId) || 0) + l.quantity));
+  for (const [itemId, qty] of totals) {
+    const item = items.find((i) => i.id === itemId);
+    if (qty > item.quantity) problems.push(`"${item.name}": the store only has ${item.quantity} in total`);
+  }
+  if (problems.length) return { error: problems.join('; ') };
+  return { fields, lines };
+}
+
+function clashResponse(clashes, canOverride) {
+  return json(409, {
+    code: 'clash',
+    error: 'Not enough available for those dates — lower the quantity, remove the item or pick other dates',
+    clashes,
+    canOverride,
+  });
+}
+
+function historyEntry(action, who, detail) {
+  return { at: new Date().toISOString(), action, by: who.name || '', email: who.email || '', detail: detail || '' };
+}
+
+function lineText(l) {
+  return `${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${l.quantity}`;
+}
+
 exports.handler = async (event) => {
   const method = event.httpMethod;
   const params = event.queryStringParameters || {};
@@ -40,121 +146,138 @@ exports.handler = async (event) => {
     return json(200, { bookings, today: malaysiaToday() });
   }
 
-  if (method === 'POST') {
-    const body = parseBody(event);
-    if (!body) return json(400, { error: 'Invalid request body' });
+  const body = method === 'DELETE' ? {} : parseBody(event);
+  if (!body) return json(400, { error: 'Invalid request body' });
+  const canManage = await isManager(event);
+  const today = malaysiaToday();
 
-    const who = recordedBy(access.user, body);
-    const eventName = String(body.event || '').trim().replace(/\s+/g, ' ');
-    const notes = String(body.notes || '').trim().slice(0, MAX_NOTES);
-    const start = String(body.startDate || '').trim();
-    const end = String(body.endDate || start).trim();
-    const today = malaysiaToday();
+  try {
+    if (method === 'POST') {
+      const who = recordedBy(access.user, body);
+      if (!who.name) return json(400, { error: 'Employee name is required' });
+      if (!who.employeeNo) return json(400, { error: 'Employee number is required' });
+      const bodyWithOrganiser = { ...body, organiser: body.organiser !== undefined && String(body.organiser).trim() ? body.organiser : who.name };
 
-    if (!who.name) return json(400, { error: 'Employee name is required' });
-    if (!who.employeeNo) return json(400, { error: 'Employee number is required' });
-    if (!eventName) return json(400, { error: 'Enter the event the items are for' });
-    if (eventName.length > MAX_EVENT) return json(400, { error: `Event name is too long (${MAX_EVENT} characters at most)` });
-    if (!validDate(start)) return json(400, { error: 'Pick the date the items are needed from' });
-    if (!validDate(end)) return json(400, { error: 'Pick the date the items will be back (or the last day of the event)' });
-    if (start < today) return json(400, { error: 'The start date has already passed' });
-    if (end < start) return json(400, { error: 'The end date is before the start date' });
-    if (daysBetween(start, end) > MAX_DAYS) return json(400, { error: `A booking can cover ${MAX_DAYS} days at most` });
-    if (daysBetween(today, start) > MAX_AHEAD_DAYS) return json(400, { error: 'That is too far ahead — book within the next two years' });
-    if (!Array.isArray(body.lines) || body.lines.length === 0) return json(400, { error: 'Add the items to book first' });
-    if (body.lines.length > MAX_LINES) return json(400, { error: `${MAX_LINES} different items at most per booking` });
+      const [items, loans] = await Promise.all([getItems(), getLoans()]);
+      const input = readEventInput(bodyWithOrganiser, items, { today });
+      if (input.error) return json(400, { error: input.error });
 
-    const wanted = new Map();
-    for (const line of body.lines) {
-      const qty = Math.round(Number(line && line.quantity));
-      if (!line || !line.itemId || !qty || qty <= 0) return json(400, { error: 'Every line needs an item and a quantity of at least 1' });
-      wanted.set(line.itemId, (wanted.get(line.itemId) || 0) + qty);
-    }
-
-    const [items, loans, bookings] = await Promise.all([getItems(), getLoans(), getBookings()]);
-    const lines = [];
-    const problems = [];
-    for (const [itemId, quantity] of wanted) {
-      const item = items.find((i) => i.id === itemId);
-      if (!item) {
-        problems.push('An item in your list no longer exists — remove it and try again');
-        continue;
-      }
-      if (item.archived) {
-        problems.push(`"${item.name}" has been archived and can no longer be booked`);
-        continue;
-      }
-      if (quantity > item.quantity) problems.push(`"${item.name}": the store only has ${item.quantity} in total`);
-      lines.push({ itemId, itemName: item.name, quantity, returnable: Boolean(item.returnable) });
-    }
-    if (problems.length) return json(400, { error: problems.join('; ') });
-
-    const clashes = findClashes(lines, { start, end, items, bookings, loans, today });
-    // Over-booking is refused. Only an admin or Store Manager may knowingly
-    // override it (logged), e.g. when the other event has agreed to share.
-    const canOverride = await isManager(event);
-    if (clashes.length && !(canOverride && body.acceptClashes === true)) {
-      return json(409, {
-        code: 'clash',
-        error: 'Not enough available for those dates — lower the quantity, remove the item or pick other dates',
-        clashes,
-        canOverride,
+      const outcome = await updateBookings((bookings) => {
+        const clashes = findClashes(input.lines, { start: input.fields.startDate, end: input.fields.endDate, items, bookings, loans, today });
+        if (clashes.length && !(canManage && body.acceptClashes === true)) return { response: clashResponse(clashes, canManage) };
+        const booking = {
+          id: genId('bkg'),
+          ...input.fields,
+          lines: input.lines,
+          ...who,
+          status: 'booked',
+          createdAt: new Date().toISOString(),
+          history: [historyEntry('created', who, input.lines.map(lineText).join(', '))],
+        };
+        if (clashes.length) booking.clashesAccepted = clashes.map((c) => ({ itemName: c.itemName, wanted: c.wanted, available: c.available }));
+        return { save: bookings.concat([booking]), booking, clashes };
       });
+      if (outcome.response) return outcome.response;
+      if (outcome.clashes.length) {
+        await audit(
+          event,
+          'booking.override',
+          `Booked ${describe(outcome.booking)} over the available stock: ${outcome.clashes.map((c) => `"${c.itemName}" ${c.wanted} wanted, ${c.available} free`).join('; ')}`
+        );
+      }
+      return json(201, { booking: outcome.booking, clashes: outcome.clashes });
     }
 
-    const booking = {
-      id: genId('bkg'),
-      event: eventName,
-      startDate: start,
-      endDate: end,
-      lines,
-      notes,
-      ...who,
-      status: 'booked',
-      createdAt: new Date().toISOString(),
-      clashesAccepted: clashes.length ? clashes.map((c) => ({ itemName: c.itemName, wanted: c.wanted, available: c.available })) : undefined,
-    };
-    // Re-read just before saving so a booking made a moment ago is not lost.
-    const latest = await getBookings();
-    latest.push(booking);
-    await saveBookings(latest);
-    if (clashes.length) {
-      await audit(
-        event,
-        'booking.override',
-        `Booked ${describe(booking)} over the available stock: ${clashes.map((c) => `"${c.itemName}" ${c.wanted} wanted, ${c.available} free`).join('; ')}`
-      );
-    }
-    return json(201, { booking, clashes });
-  }
-
-  if (method === 'PATCH' || method === 'DELETE') {
     if (!params.id) return json(400, { error: 'Missing id query parameter' });
-    const bookings = await getBookings();
-    const booking = bookings.find((b) => b.id === params.id);
-    if (!booking) return json(404, { error: 'That booking no longer exists' });
 
-    const admin = await isManager(event);
+    if (method === 'PUT') {
+      const [items, loans] = await Promise.all([getItems(), getLoans()]);
+      const who = access.user ? { name: access.user.name, email: access.user.email } : { name: 'Admin', email: '' };
+      const outcome = await updateBookings((bookings) => {
+        const booking = bookings.find((b) => b.id === params.id);
+        if (!booking) return { response: json(404, { error: 'That event no longer exists' }) };
+        const own = Boolean(access.user && booking.email && access.user.email === booking.email);
+        if (!own && !canManage) return { response: json(403, { error: 'Only the person who booked this event (signed in), an admin or a Store Manager can change it' }) };
+        if (booking.status !== 'booked') return { response: json(400, { error: `This event is ${booking.status} and can no longer be changed` }) };
+        const input = readEventInput(body, items, { existing: booking, today });
+        if (input.error) return { response: json(400, { error: input.error }) };
+        const clashes = findClashes(input.lines, { start: input.fields.startDate, end: input.fields.endDate, excludeId: booking.id, items, bookings, loans, today });
+        if (clashes.length && !(canManage && body.acceptClashes === true)) return { response: clashResponse(clashes, canManage) };
+
+        const changes = [];
+        for (const key of [...Object.keys(LIMITS), 'startDate', 'endDate']) {
+          if ((booking[key] || '') !== (input.fields[key] || '')) changes.push(key === 'event' ? 'name' : key.replace(/([A-Z])/g, ' $1').toLowerCase());
+        }
+        const before = (booking.lines || []).map(lineText).join(', ');
+        const after = input.lines.map(lineText).join(', ');
+        if (before !== after) changes.push(`items: ${after || '(none)'}`);
+        const next = {
+          ...booking,
+          ...input.fields,
+          lines: input.lines,
+          editedAt: new Date().toISOString(),
+          history: (booking.history || []).concat(changes.length ? [historyEntry('edited', who, changes.join('; '))] : []),
+        };
+        if (clashes.length) next.clashesAccepted = clashes.map((c) => ({ itemName: c.itemName, wanted: c.wanted, available: c.available }));
+        else delete next.clashesAccepted;
+        return { save: bookings.map((b) => (b.id === booking.id ? next : b)), booking: next, own, changes, clashes };
+      });
+      if (outcome.response) return outcome.response;
+      if (!outcome.own && outcome.changes.length) await audit(event, 'booking.edit', `Edited event ${describe(outcome.booking)}: ${outcome.changes.join('; ')}`);
+      if (outcome.clashes.length) {
+        await audit(event, 'booking.override', `Changed ${describe(outcome.booking)} over the available stock: ${outcome.clashes.map((c) => `"${c.itemName}" ${c.wanted} wanted, ${c.available} free`).join('; ')}`);
+      }
+      return json(200, { booking: outcome.booking, clashes: outcome.clashes });
+    }
+
     if (method === 'DELETE') {
-      if (!admin) return json(401, { error: 'Admin access required', code: 'admin_required' });
-      await saveBookings(bookings.filter((b) => b !== booking));
-      await audit(event, 'booking.delete', `Deleted ${booking.status} booking ${describe(booking)}`);
-      return json(200, { booking });
+      if (!canManage) return json(401, { error: 'Admin or Store Manager access required', code: 'admin_required' });
+      const outcome = await updateBookings((bookings) => {
+        const booking = bookings.find((b) => b.id === params.id);
+        if (!booking) return { response: json(404, { error: 'That event no longer exists' }) };
+        return { save: bookings.filter((b) => b.id !== params.id), booking };
+      });
+      if (outcome.response) return outcome.response;
+      await audit(event, 'booking.delete', `Deleted ${outcome.booking.status} event booking ${describe(outcome.booking)}`);
+      return json(200, { booking: outcome.booking });
     }
 
-    const body = parseBody(event);
-    if (!body || body.status !== 'cancelled') return json(400, { error: 'Only cancelling a booking is supported' });
-    const own = Boolean(access.user && booking.email && access.user.email === booking.email);
-    if (!own && !admin) {
-      return json(403, { error: 'Only the person who made this booking (signed in) or an admin can cancel it' });
+    if (method === 'PATCH') {
+      if (body.status !== 'cancelled') return json(400, { error: 'Only cancelling a booking is supported' });
+      const who = access.user ? { name: access.user.name, email: access.user.email } : { name: 'Admin', email: '' };
+      const outcome = await updateBookings((bookings) => {
+        const booking = bookings.find((b) => b.id === params.id);
+        if (!booking) return { response: json(404, { error: 'That booking no longer exists' }) };
+        const own = Boolean(access.user && booking.email && access.user.email === booking.email);
+        if (!own && !canManage) {
+          return { response: json(403, { error: 'Only the person who made this booking (signed in), an admin or a Store Manager can cancel it' }) };
+        }
+        if (booking.status !== 'booked') {
+          return {
+            response: json(400, {
+              error:
+                booking.status === 'collected'
+                  ? 'The items for this event have already been collected — return them instead of cancelling'
+                  : `This booking is already ${booking.status}`,
+            }),
+          };
+        }
+        const next = {
+          ...booking,
+          status: 'cancelled',
+          cancelledAt: new Date().toISOString(),
+          cancelledBy: access.user ? access.user.email : 'admin',
+          history: (booking.history || []).concat([historyEntry('cancelled', who, body.reason ? tidy(body.reason, 200) : '')]),
+        };
+        return { save: bookings.map((b) => (b.id === booking.id ? next : b)), booking: next, own };
+      });
+      if (outcome.response) return outcome.response;
+      if (!outcome.own) await audit(event, 'booking.cancel', `Cancelled booking ${describe(outcome.booking)}`);
+      return json(200, { booking: outcome.booking });
     }
-    if (booking.status !== 'booked') return json(400, { error: `This booking is already ${booking.status}` });
-    booking.status = 'cancelled';
-    booking.cancelledAt = new Date().toISOString();
-    booking.cancelledBy = access.user ? access.user.email : 'admin';
-    await saveBookings(bookings);
-    if (!own) await audit(event, 'booking.cancel', `Cancelled booking ${describe(booking)}`);
-    return json(200, { booking });
+  } catch (err) {
+    if (err && err.code === 'busy') return json(503, { error: err.message, code: 'busy' });
+    throw err;
   }
 
   return { statusCode: 405, body: 'Method Not Allowed' };

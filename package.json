@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "ViTrox College Store Room Dashboard",
   "dependencies": {
-    "@netlify/blobs": "^8.1.0",
+    "@netlify/blobs": "^10.7.13",
     "nodemailer": "^6.9.0"
   }
 }

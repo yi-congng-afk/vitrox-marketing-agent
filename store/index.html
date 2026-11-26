@@ -48,9 +48,9 @@
           <h1>Store Room Dashboard</h1>
         </div>
         <nav class="topbar-right" aria-label="Main actions">
-          <button id="loans-btn" class="nav-btn sky-btn" type="button" aria-label="Loans and bookings">
+          <button id="loans-btn" class="nav-btn sky-btn" type="button" aria-label="Loans and returns">
             <svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg>
-            <span class="btn-label">Loans &amp; Bookings</span>
+            <span class="btn-label">Loans &amp; Returns</span>
             <span id="loans-badge" class="badge" hidden>0</span>
           </button>
           <button id="reports-btn" class="nav-btn" type="button" aria-label="Alerts and reports">
@@ -112,6 +112,13 @@
         </button>
       </div>
 
+      <nav class="view-tabs" role="tablist" aria-label="Sections">
+        <button type="button" class="view-tab active" role="tab" aria-selected="true" data-view="inventory"><svg class="icon" aria-hidden="true"><use href="#i-package"/></svg> Inventory</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="calendar"><svg class="icon" aria-hidden="true"><use href="#i-calendar"/></svg> Calendar</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="events"><svg class="icon" aria-hidden="true"><use href="#i-flag"/></svg> Events</button>
+      </nav>
+
+      <section id="view-inventory" class="view">
       <div class="toolbar">
         <div class="search-box">
           <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
@@ -159,6 +166,62 @@
           <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg> Try again
         </button>
       </div>
+      </section>
+
+      <section id="view-calendar" class="view" hidden>
+        <div class="cal-toolbar">
+          <div class="cal-nav">
+            <button id="cal-prev" class="icon-btn" type="button" aria-label="Previous">‹</button>
+            <button id="cal-today" class="ghost-btn" type="button">Today</button>
+            <button id="cal-next" class="icon-btn" type="button" aria-label="Next">›</button>
+            <h2 id="cal-title" class="cal-title"></h2>
+          </div>
+          <div id="cal-modes" class="tab-row cal-modes" role="group" aria-label="Calendar view">
+            <button type="button" class="chip active" data-cal-mode="month">Month</button>
+            <button type="button" class="chip" data-cal-mode="week">Week</button>
+            <button type="button" class="chip" data-cal-mode="day">Day</button>
+            <button type="button" class="chip" data-cal-mode="agenda">Agenda</button>
+          </div>
+        </div>
+        <div id="cal-filters" class="chip-row" role="group" aria-label="Show">
+          <button type="button" class="chip active" data-cal-filter="all">All activities</button>
+          <button type="button" class="chip" data-cal-filter="events">Events</button>
+          <button type="button" class="chip" data-cal-filter="bookings">Item bookings</button>
+          <button type="button" class="chip" data-cal-filter="borrowings">Active borrowings</button>
+          <button type="button" class="chip" data-cal-filter="returns">Returns</button>
+          <button type="button" class="chip" data-cal-filter="mine">My bookings</button>
+        </div>
+        <p class="cal-legend" aria-label="Colour key">
+          <span class="cal-key s-event">Event</span>
+          <span class="cal-key s-active">Booked items out / borrowed</span>
+          <span class="cal-key s-returned">Returned</span>
+          <span class="cal-key s-overdue">Overdue</span>
+          <span class="cal-key s-cancelled">Cancelled</span>
+        </p>
+        <div id="cal-body" class="cal-body"></div>
+      </section>
+
+      <section id="view-events" class="view" hidden>
+        <div class="view-head">
+          <h2>Events</h2>
+          <button id="create-event-btn" class="primary-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Create Event</button>
+        </div>
+        <div class="toolbar">
+          <div class="search-box">
+            <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+            <input id="events-search" type="search" placeholder="Search event, venue, organiser or item…" aria-label="Search events" autocomplete="off" />
+          </div>
+        </div>
+        <div id="events-filters" class="chip-row" role="group" aria-label="Which events">
+          <button type="button" class="chip active" data-events-filter="upcoming">Upcoming</button>
+          <button type="button" class="chip" data-events-filter="past">Past</button>
+          <button type="button" class="chip" data-events-filter="cancelled">Cancelled</button>
+          <button type="button" class="chip" data-events-filter="mine">My events</button>
+          <button type="button" class="chip" data-events-filter="all">All</button>
+        </div>
+        <div id="events-list" class="events-list"></div>
+        <p id="events-empty" class="empty-state" hidden></p>
+      </section>
     </main>
   </div>
 
@@ -221,6 +284,7 @@
 
           <div class="detail-actions">
             <span class="cart-add-group">
+              <select id="detail-design" class="detail-design" aria-label="Design" hidden></select>
               <span class="stepper">
                 <button type="button" class="step-btn" data-step="-1" aria-label="Decrease quantity"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
                 <input id="detail-cart-qty" type="number" inputmode="numeric" min="1" step="1" value="1" aria-label="Quantity to move out" />
@@ -343,11 +407,6 @@
       </div>
       <div id="cart-lines"></div>
       <form id="checkout-form">
-        <div class="tab-row cart-mode" role="group" aria-label="Take the items now, or book them for an event">
-          <button id="cart-mode-now" class="chip active" type="button" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-cart"/></svg> Take out now</button>
-          <button id="cart-mode-book" class="chip" type="button" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-calendar"/></svg> Book for an event</button>
-        </div>
-        <p id="cart-mode-hint" class="muted-text cart-mode-hint"></p>
         <p id="cart-booking-note" class="loanable-note" hidden></p>
         <h3>Your details <span class="h3-note">— entered once for everything in the cart</span></h3>
         <p id="checkout-person-note" class="person-note" hidden></p>
@@ -355,17 +414,13 @@
           <label>Your name <input id="checkout-name" type="text" autocomplete="name" required /></label>
           <label>Employee number <input id="checkout-employee-no" type="text" required /></label>
         </div>
-        <label><span id="checkout-purpose-label">Purpose / event</span> <textarea id="checkout-purpose" rows="2" placeholder="e.g. Education Fair at Sunway Carnival" required></textarea></label>
-        <div id="booking-dates" class="form-row" hidden>
-          <label>Needed from <input id="booking-start" type="date" /></label>
-          <label>Until (back in the store by) <input id="booking-end" type="date" /></label>
-        </div>
-        <div id="booking-clashes" class="clash-box" role="alert" hidden></div>
+        <label>Purpose / event <textarea id="checkout-purpose" rows="2" placeholder="e.g. Education Fair at Sunway Carnival" required></textarea></label>
         <label id="checkout-return-label" hidden>Expected return date for the loanable items <input id="checkout-return-date" type="date" /></label>
         <p id="checkout-loan-note" class="loanable-note" hidden></p>
         <p id="checkout-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
           <button id="checkout-submit-btn" type="submit" class="primary-btn"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg> Checkout</button>
+          <button id="cart-book-btn" type="button" class="ghost-btn" title="Reserve these items for a future event instead of taking them now"><svg class="icon" aria-hidden="true"><use href="#i-calendar"/></svg> Book for an event</button>
           <button type="button" class="ghost-btn" data-close>Continue Browsing</button>
           <button id="cart-clear-btn" type="button" class="link-btn danger-text push-right">Clear cart</button>
         </div>
@@ -392,11 +447,10 @@
   <div id="loans-modal" class="modal-overlay" hidden>
     <div class="modal loans-modal" role="dialog" aria-modal="true" aria-labelledby="loans-modal-title" tabindex="-1">
       <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
-      <h2 id="loans-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg> Loans &amp; Bookings</h2>
-      <div class="tab-row" role="group" aria-label="Which records to show">
+      <h2 id="loans-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-clipboard"/></svg> Loans &amp; Returns</h2>
+      <div class="tab-row" role="group" aria-label="Which loans to show">
         <button id="loans-tab-open" class="chip active" type="button">Not Yet Returned</button>
         <button id="loans-tab-all" class="chip" type="button">Borrow History</button>
-        <button id="loans-tab-bookings" class="chip" type="button"><svg class="icon" aria-hidden="true"><use href="#i-calendar"/></svg> Event Bookings</button>
       </div>
       <div class="loans-toolbar">
         <div class="search-box">
@@ -404,7 +458,6 @@
           <input id="loans-search" type="search" placeholder="Search item, borrower or event…" aria-label="Search loan records" autocomplete="off" />
         </div>
         <button id="loans-return-selected-btn" class="ghost-btn sky-btn" type="button">Return Selected</button>
-        <button id="new-booking-btn" class="ghost-btn" type="button" hidden><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> New Booking</button>
         <button id="loans-export-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export (CSV)</button>
       </div>
       <div class="table-scroll">
@@ -541,6 +594,73 @@
           <button type="button" class="ghost-btn" data-close>Cancel</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Event: create / edit / duplicate -->
+  <div id="event-form-modal" class="modal-overlay" hidden>
+    <div class="modal event-form-modal" role="dialog" aria-modal="true" aria-labelledby="event-form-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="event-form-title">Create Event</h2>
+      <p class="subtitle">Items are collected on the start date and due back on the end date. If everything is available, the booking is confirmed straight away.</p>
+      <form id="event-form">
+        <p id="event-person-note" class="person-note" hidden></p>
+        <div class="form-row" id="ev-person-row">
+          <label>Your name <input id="ev-person-name" type="text" autocomplete="name" required /></label>
+          <label>Employee number <input id="ev-person-no" type="text" required /></label>
+        </div>
+        <label>Event name <input id="ev-name" type="text" maxlength="120" required placeholder="e.g. ViTrox College Open Day" /></label>
+        <div class="form-row">
+          <label>Category <select id="ev-category" required></select></label>
+          <label>Venue / location <input id="ev-venue" type="text" maxlength="120" required /></label>
+        </div>
+        <div class="form-row">
+          <label>Start date (collect items) <input id="ev-start" type="date" required /></label>
+          <label>End date (return items) <input id="ev-end" type="date" required /></label>
+        </div>
+        <div class="form-row">
+          <label>Organiser <input id="ev-organiser" type="text" maxlength="80" required /></label>
+          <label>Department <input id="ev-department" type="text" maxlength="80" /></label>
+        </div>
+        <label>Contact <input id="ev-contact" type="text" maxlength="120" placeholder="Email or phone" /></label>
+        <label>Description <textarea id="ev-description" rows="2" maxlength="1000"></textarea></label>
+        <h3>Items for this event</h3>
+        <ul id="ev-lines" class="ev-lines"></ul>
+        <div class="ev-add">
+          <select id="ev-add-item" aria-label="Item to add"></select>
+          <button id="ev-add-btn" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Add item</button>
+        </div>
+        <label>Notes <textarea id="ev-notes" rows="2" maxlength="500"></textarea></label>
+        <div id="ev-clashes" class="clash-box" role="alert" hidden></div>
+        <p id="event-form-error" class="error-text" role="alert" hidden></p>
+        <div class="form-actions">
+          <button id="ev-submit" type="submit" class="primary-btn">Book event</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Event details -->
+  <div id="event-modal" class="modal-overlay" hidden>
+    <div class="modal event-modal" role="dialog" aria-modal="true" aria-labelledby="ev-d-name" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <div class="event-head"><span id="ev-d-category" class="tag"></span> <span id="ev-d-status"></span></div>
+      <h2 id="ev-d-name"></h2>
+      <p id="ev-d-dates" class="event-dates"></p>
+      <dl id="ev-d-info" class="event-info"></dl>
+      <p id="ev-d-description" class="event-description"></p>
+      <h3>Items</h3>
+      <div class="table-scroll">
+        <table class="history-table">
+          <thead><tr><th>Item</th><th>Design</th><th>Booked</th><th>Collected</th><th>Returned</th></tr></thead>
+          <tbody id="ev-d-lines"></tbody>
+        </table>
+      </div>
+      <p id="ev-d-collection" class="loanable-note event-collection"></p>
+      <div id="ev-d-actions" class="detail-actions"></div>
+      <h3>History</h3>
+      <ul id="ev-d-history" class="event-history"></ul>
     </div>
   </div>
 

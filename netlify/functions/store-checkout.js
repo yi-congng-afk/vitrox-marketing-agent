@@ -5,8 +5,10 @@ const {
   saveTransactions,
   getLoans,
   saveLoans,
-  getBookings,
-  saveBookings,
+  updateItems,
+  updateTransactions,
+  updateLoans,
+  updateBookings,
   genId,
 } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
@@ -101,58 +103,94 @@ exports.handler = async (event) => {
     return json(400, { error: 'Your cart is empty' });
   }
 
-  // Merge duplicate lines for the same item so the stock check sees the total.
-  const wanted = new Map();
+  // One line per item + design. Designs of an item share its stock, so the
+  // stock check uses each item's total.
+  const wantedLines = new Map();
   for (const line of body.lines) {
     const qty = Math.round(Number(line && line.quantity));
     if (!line || !line.itemId || !qty || qty <= 0) {
       return json(400, { error: 'Every cart line needs an item and a quantity of at least 1' });
     }
-    wanted.set(line.itemId, (wanted.get(line.itemId) || 0) + qty);
+    const key = `${line.itemId}|${line.variationId || ''}`;
+    const prev = wantedLines.get(key);
+    wantedLines.set(key, { itemId: line.itemId, variationId: line.variationId || null, quantity: (prev ? prev.quantity : 0) + qty });
   }
-
-  const [items, transactions, loans] = await Promise.all([getItems(), getTransactions(), getLoans()]);
-
-  const problems = [];
-  let hasLoanable = false;
-  for (const [itemId, qty] of wanted) {
-    const item = items.find((i) => i.id === itemId);
-    if (!item) {
-      problems.push('An item in your cart no longer exists — remove it and try again');
-      continue;
-    }
-    if (item.archived) {
-      problems.push(`"${item.name}" has been archived and can no longer be moved out`);
-      continue;
-    }
-    const available = item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity;
-    if (qty > available) {
-      problems.push(`"${item.name}": you asked for ${qty} but only ${available} available`);
-    }
-    if (item.returnable) hasLoanable = true;
-  }
-  if (hasLoanable && !expectedReturnDate) {
-    problems.push('An expected return date is required because your cart has loanable items');
-  }
-  if (problems.length > 0) return json(400, { error: problems.join('; ') });
 
   const now = new Date().toISOString();
   const checkoutId = genId('chk');
+  let lines;
+  let crossedLowStock = [];
+
+  // Stock first, with safe saving: if someone else takes items at the same
+  // moment, this re-reads the stock and checks again, so the last items can
+  // only go once.
+  let stock;
+  try {
+    stock = await updateItems((items) => {
+      const problems = [];
+      let hasLoanable = false;
+      const resolved = [];
+      for (const want of wantedLines.values()) {
+        const item = items.find((i) => i.id === want.itemId);
+        if (!item) {
+          problems.push('An item in your cart no longer exists — remove it and try again');
+          continue;
+        }
+        if (item.archived) {
+          problems.push(`"${item.name}" has been archived and can no longer be moved out`);
+          continue;
+        }
+        const designs = item.hasVariations ? (item.variations || []).filter((v) => v.active) : [];
+        const variation = designs.length ? designs.find((v) => v.id === want.variationId) || null : null;
+        if (want.variationId && !variation && designs.length) {
+          problems.push(`"${item.name}": that design is no longer available — choose another`);
+          continue;
+        }
+        resolved.push({ item, want, variation });
+        if (item.returnable) hasLoanable = true;
+      }
+      const totals = new Map();
+      resolved.forEach(({ item, want }) => totals.set(item.id, (totals.get(item.id) || 0) + want.quantity));
+      for (const [itemId, qty] of totals) {
+        const item = items.find((i) => i.id === itemId);
+        const available = item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity;
+        if (qty > available) problems.push(`"${item.name}": you asked for ${qty} but only ${available} available`);
+      }
+      if (hasLoanable && !expectedReturnDate) problems.push('An expected return date is required because your cart has loanable items');
+      if (problems.length) return { response: json(400, { error: problems.join('; ') }) };
+
+      const crossed = [];
+      const out = [];
+      for (const { item, want, variation } of resolved) {
+        const before = item.quantity;
+        if (item.returnable) item.quantityOnLoan = (item.quantityOnLoan || 0) + want.quantity;
+        else item.quantity -= want.quantity;
+        item.updatedAt = now;
+        out.push({ item: { ...item }, quantity: want.quantity, variation, quantityBefore: before });
+        if (!item.returnable && before > item.lowStockThreshold && item.quantity <= item.lowStockThreshold && !crossed.includes(item)) crossed.push(item);
+      }
+      return { save: items, lines: out, crossed };
+    });
+  } catch (err) {
+    if (err && err.code === 'busy') return json(503, { error: err.message, code: 'busy' });
+    throw err;
+  }
+  if (stock.response) return stock.response;
+  lines = stock.lines;
+  crossedLowStock = stock.crossed;
+
+  const designFields = (v) => (v ? { variationId: v.id, variationName: v.name, variationCode: v.code } : {});
   const newTransactions = [];
   const newLoans = [];
-  const crossedLowStock = [];
-
-  for (const [itemId, qty] of wanted) {
-    const item = items.find((i) => i.id === itemId);
-
-    if (item.returnable) {
-      item.quantityOnLoan = (item.quantityOnLoan || 0) + qty;
+  for (const line of lines) {
+    if (line.item.returnable) {
       newLoans.push({
         id: genId('loan'),
         checkoutId,
-        itemId,
-        itemName: item.name,
-        quantity: qty,
+        itemId: line.item.id,
+        itemName: line.item.name,
+        ...designFields(line.variation),
+        quantity: line.quantity,
         quantityReturned: 0,
         ...who,
         purpose,
@@ -160,34 +198,32 @@ exports.handler = async (event) => {
         loanedAt: now,
         status: 'open',
         returns: [],
+        ...(body.bookingId ? { bookingId: String(body.bookingId) } : {}),
       });
     } else {
-      const quantityBefore = item.quantity;
-      item.quantity = quantityBefore - qty;
       newTransactions.push({
         id: genId('txn'),
         checkoutId,
-        itemId,
-        itemName: item.name,
+        itemId: line.item.id,
+        itemName: line.item.name,
+        ...designFields(line.variation),
         type: 'remove',
-        quantity: qty,
-        quantityBefore,
-        quantityAfter: item.quantity,
+        quantity: line.quantity,
+        quantityBefore: line.quantityBefore,
+        quantityAfter: line.quantityBefore - line.quantity,
         ...who,
         remarks: purpose,
         timestamp: now,
+        ...(body.bookingId ? { bookingId: String(body.bookingId) } : {}),
       });
-      if (quantityBefore > item.lowStockThreshold && item.quantity <= item.lowStockThreshold) {
-        crossedLowStock.push(item);
-      }
     }
-    item.updatedAt = now;
   }
 
+  // The records are added to the lists with safe saving too, so two checkouts
+  // at the same moment never lose each other's records.
   await Promise.all([
-    saveItems(items),
-    newTransactions.length > 0 ? saveTransactions(transactions.concat(newTransactions)) : null,
-    newLoans.length > 0 ? saveLoans(loans.concat(newLoans)) : null,
+    newTransactions.length ? updateTransactions((list) => ({ save: list.concat(newTransactions) })) : null,
+    newLoans.length ? updateLoans((list) => ({ save: list.concat(newLoans) })) : null,
   ]);
 
   // Moving out a booked event's items: the booking is now collected, so it
@@ -195,13 +231,22 @@ exports.handler = async (event) => {
   let booking = null;
   if (body.bookingId) {
     try {
-      const bookings = await getBookings();
-      const found = bookings.find((b) => b.id === body.bookingId && b.status === 'booked');
-      if (found) {
-        Object.assign(found, { status: 'collected', collectedAt: now, checkoutId, collectedBy: who.email || who.name });
-        await saveBookings(bookings);
-        booking = found;
-      }
+      const done = await updateBookings((bookings) => {
+        const found = bookings.find((b) => b.id === body.bookingId && b.status === 'booked');
+        if (!found) return { booking: null };
+        const collected = lines.map((l) => `${l.item.name}${l.variation ? ` (${l.variation.name})` : ''} × ${l.quantity}`).join(', ');
+        const next = {
+          ...found,
+          status: 'collected',
+          collectedAt: now,
+          checkoutId,
+          collectedBy: who.email || who.name,
+          collectedLines: lines.map((l) => ({ itemId: l.item.id, itemName: l.item.name, ...designFields(l.variation), quantity: l.quantity })),
+          history: (found.history || []).concat([{ at: now, action: 'collected', by: who.name, email: who.email || '', detail: collected }]),
+        };
+        return { save: bookings.map((b) => (b.id === found.id ? next : b)), booking: next };
+      });
+      booking = done.booking;
     } catch {
       // The move-out itself is recorded; the booking can be cancelled by hand.
     }

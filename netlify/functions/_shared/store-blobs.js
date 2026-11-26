@@ -272,6 +272,64 @@ async function saveLoans(loans) {
   await loansStore().setJSON('loans', loans);
 }
 
+// ---- Safe saving ----
+// Read a list, change it, and save it only if nobody else saved in between
+// (an ETag check). If someone did, read again and redo the change, so two
+// people booking or taking the last items at the same moment can never both
+// succeed, and no record is lost.
+//   mutate(current) -> { save: newValue, ...anything } to save, or anything
+//   without `save` to stop without saving (e.g. a refusal).
+
+function pause(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function updateJSON(store, key, fallback, mutate, tries = 6) {
+  for (let attempt = 0; attempt < tries; attempt++) {
+    let data = null;
+    let etag;
+    if (typeof store.getWithMetadata === 'function') {
+      const entry = await store.getWithMetadata(key, { type: 'json' });
+      if (entry) {
+        data = entry.data;
+        etag = entry.etag;
+      }
+    } else {
+      data = await store.get(key, { type: 'json' });
+    }
+    const current = data === null || data === undefined ? fallback() : data;
+    const outcome = await mutate(current);
+    if (!outcome || outcome.save === undefined) return outcome;
+    const options = etag ? { onlyIfMatch: etag } : data === null || data === undefined ? { onlyIfNew: true } : undefined;
+    const result = await store.setJSON(key, outcome.save, options);
+    if (!result || result.modified !== false) return outcome;
+    await pause(30 * (attempt + 1) + Math.floor(Math.random() * 40));
+  }
+  const err = new Error('Several people are saving at the same moment — please try again.');
+  err.code = 'busy';
+  throw err;
+}
+
+const normaliseItems = (list) =>
+  (Array.isArray(list) ? list : []).map((item) =>
+    item.returnable === undefined || item.quantityOnLoan === undefined
+      ? { ...item, returnable: Boolean(item.returnable), quantityOnLoan: item.quantityOnLoan || 0 }
+      : item
+  );
+
+function updateItems(mutate) {
+  return updateJSON(itemsStore(), 'items', () => SEED_ITEMS.slice(), (list) => mutate(normaliseItems(list)));
+}
+function updateTransactions(mutate) {
+  return updateJSON(transactionsStore(), 'transactions', () => [], mutate);
+}
+function updateLoans(mutate) {
+  return updateJSON(loansStore(), 'loans', () => [], mutate);
+}
+function updateBookings(mutate) {
+  return updateJSON(bookingsStore(), 'bookings', () => [], (list) => mutate(Array.isArray(list) ? list : []));
+}
+
 function bookingsStore() {
   return getStore(storeConfig('vitrox-store-bookings'));
 }
@@ -301,6 +359,11 @@ module.exports = {
   saveLoans,
   getBookings,
   saveBookings,
+  updateJSON,
+  updateItems,
+  updateTransactions,
+  updateLoans,
+  updateBookings,
   genId,
   getConfig,
   saveConfig,
