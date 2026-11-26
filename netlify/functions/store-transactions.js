@@ -104,7 +104,7 @@ exports.handler = async (event) => {
       type === 'remove' && quantityBefore > item.lowStockThreshold && item.quantity <= item.lowStockThreshold;
     if (justCrossedLowStock) {
       await sendAlertEmail(
-        `[ViTrox Store] Low stock: ${item.name}`,
+        `[VCLG Store Room] Low stock: ${item.name}`,
         `"${item.name}" has dropped to ${item.quantity} ${item.unit || 'pcs'}, at or below its low-stock threshold of ${item.lowStockThreshold}.\n\n` +
           `Moved out by ${transaction.name} (${transaction.employeeNo})\nPurpose: ${transaction.remarks}\nWhen: ${transaction.timestamp}`
       );

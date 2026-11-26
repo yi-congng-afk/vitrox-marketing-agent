@@ -244,7 +244,7 @@ exports.handler = async (event) => {
       }
       await updateReports((reports) => ({ save: reports.concat(newReports) }));
       await sendAlertEmail(
-        `[ViTrox Store] Returned with problems: ${[...new Set(problems.map((c) => c.loan.itemName))].join(', ')}`,
+        `[VCLG Store Room] Returned with problems: ${[...new Set(problems.map((c) => c.loan.itemName))].join(', ')}`,
         newReports.map((r) => `- ${r.itemName}: ${r.message}`).join('\n') + `\n\nRecorded by ${name} (${employeeNo})\nWhen: ${returnedAt}`
       );
     }

@@ -3211,7 +3211,7 @@ function reportFileName(kind, ext) {
   const conf = REPORTS[kind];
   const slug = conf.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const range = conf.dated ? `-${el('rp-from').value || 'start'}-to-${el('rp-to').value || todayStr()}` : `-${todayStr()}`;
-  return `vitrox-store-${slug}${range}.${ext}`;
+  return `vclg-store-room-${slug}${range}.${ext}`;
 }
 
 function downloadXlsx(filename, sheets) {
@@ -3241,7 +3241,7 @@ el('rp-xlsx-btn').addEventListener('click', () => {
 el('rp-all-btn').addEventListener('click', () => {
   // Every report in one workbook, one sheet each.
   downloadXlsx(
-    `vitrox-store-all-reports-${todayStr()}.xlsx`,
+    `vclg-store-room-all-reports-${todayStr()}.xlsx`,
     Object.keys(REPORTS).map((kind) => ({ name: REPORTS[kind].label.replace('Most frequently borrowed / used items', 'Most borrowed or used'), rows: reportRows(kind) }))
   );
 });
@@ -4188,7 +4188,7 @@ el('loans-export-btn').addEventListener('click', () => {
       ];
     }),
   ];
-  downloadCsv(`vitrox-store-loan-records-${todayStr()}.csv`, rows);
+  downloadCsv(`vclg-store-room-loan-records-${todayStr()}.csv`, rows);
 });
 
 // ---------- Report an issue ----------
@@ -4929,7 +4929,7 @@ async function downloadBackup() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `vitrox-store-backup-${todayStr()}.json`;
+  link.download = `vclg-store-room-backup-${todayStr()}.json`;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -5402,7 +5402,7 @@ function labelHtml(choice) {
     `<div class="qr-code">${qrSvg(choice.url)}</div>` +
     `<div class="qr-text"><strong>${escapeHtml(choice.title)}</strong>` +
     choice.subs.map((s) => `<span class="qr-sub">${escapeHtml(s)}</span>`).join('') +
-    `<span class="qr-brand">ViTrox College Store · scan to open</span></div>` +
+    `<span class="qr-brand">VCLG Store Room · scan to open</span></div>` +
     `</div>`
   );
 }
@@ -5648,7 +5648,7 @@ el('export-items-btn').addEventListener('click', () => {
       i.archived ? 'Archived' : 'In use',
     ]),
   ];
-  downloadCsv(`vitrox-store-inventory-${todayStr()}.csv`, rows);
+  downloadCsv(`vclg-store-room-inventory-${todayStr()}.csv`, rows);
 });
 
 el('export-txns-btn').addEventListener('click', () => {
@@ -5673,7 +5673,7 @@ el('export-txns-btn').addEventListener('click', () => {
         t.email || '',
       ]),
     ];
-    downloadCsv(`vitrox-store-activity-log-${todayStr()}.csv`, rows);
+    downloadCsv(`vclg-store-room-activity-log-${todayStr()}.csv`, rows);
   });
 });
 

@@ -40,14 +40,14 @@ function personEmail(loans, today) {
   const first = loans[0];
   const count = loans.reduce((sum, l) => sum + (l.quantity - l.quantityReturned - (l.quantityMissing || 0)), 0);
   return {
-    subject: `[ViTrox Store] Reminder: please return ${plural(count, 'item', 'items')} to the store room`,
+    subject: `[VCLG Store Room] Reminder: please return ${plural(count, 'item', 'items')} to the store room`,
     text:
       `Hi ${first.name || 'there'},\n\n` +
-      `Our records show you still have these items from the ViTrox College store room, and they are past their return date:\n\n` +
+      `Our records show you still have these items from the VCLG Store Room, and they are past their return date:\n\n` +
       loans.map((l) => loanLine(l, today)).join('\n') +
-      `\n\nPlease bring them back to the store room, then press "Return" in the store dashboard:\n${SITE_URL}\n\n` +
+      `\n\nPlease bring them back to the store room, then press "Return" in the VCLG Store Room app:\n${SITE_URL}\n\n` +
       `Already returned them? Please reply to this email so the record can be corrected.\n\n` +
-      `Thank you,\nViTrox College Store Room\n\n` +
+      `Thank you,\nVCLG Store Room\n\n` +
       `(You will get this reminder every ${REMIND_EVERY_DAYS} days until the items are returned.)`,
   };
 }
@@ -59,7 +59,7 @@ function adminSummary(reminded, failed, noEmail, today) {
       : '';
   const total = reminded.length + failed.length + noEmail.length;
   return {
-    subject: `[ViTrox Store] Overdue loans: ${plural(total, 'record needs', 'records need')} returning`,
+    subject: `[VCLG Store Room] Overdue loans: ${plural(total, 'record needs', 'records need')} returning`,
     text:
       section('Borrowers reminded by email today:', reminded) +
       section('Reminder email could NOT be sent — please follow up yourself:', failed) +
@@ -80,25 +80,25 @@ function eventItems(b) {
 
 function collectionEmail(b) {
   return {
-    subject: `[ViTrox Store] Tomorrow: collect the items for "${b.event}"`,
+    subject: `[VCLG Store Room] Tomorrow: collect the items for "${b.event}"`,
     text:
       `Hi ${b.name || 'there'},\n\n` +
       `Your event "${b.event}" starts tomorrow (${fmtDate(b.startDate)}${b.venue ? `, ${b.venue}` : ''}). These items are reserved for it:\n\n` +
       eventItems(b) +
-      `\n\nCollect them from the store room and press "Move out" on the event in the store dashboard, so they are recorded as out:\n${SITE_URL}\n\n` +
+      `\n\nCollect them from the store room and press "Move out" on the event in the VCLG Store Room app, so they are recorded as out:\n${SITE_URL}\n\n` +
       `They are due back by ${fmtDate(b.endDate)}. Not needed any more? Please cancel the event there, so the items are free for others.\n\n` +
-      `Thank you,\nViTrox College Store Room`,
+      `Thank you,\nVCLG Store Room`,
   };
 }
 
 function dueTomorrowEmail(loans) {
   const first = loans[0];
   return {
-    subject: `[ViTrox Store] Reminder: ${plural(loans.reduce((s, l) => s + (l.quantity - l.quantityReturned - (l.quantityMissing || 0)), 0), 'item is', 'items are')} due back tomorrow`,
+    subject: `[VCLG Store Room] Reminder: ${plural(loans.reduce((s, l) => s + (l.quantity - l.quantityReturned - (l.quantityMissing || 0)), 0), 'item is', 'items are')} due back tomorrow`,
     text:
-      `Hi ${first.name || 'there'},\n\nA friendly reminder — these items from the ViTrox College store room are due back tomorrow (${fmtDate(first.expectedReturnDate)}):\n\n` +
+      `Hi ${first.name || 'there'},\n\nA friendly reminder — these items from the VCLG Store Room are due back tomorrow (${fmtDate(first.expectedReturnDate)}):\n\n` +
       loans.map((l) => `- ${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${l.quantity - l.quantityReturned - (l.quantityMissing || 0)} — for ${l.purpose || 'no purpose given'}`).join('\n') +
-      `\n\nWhen you bring them back, press "Return" in the store dashboard (and tick "Damaged or missing?" if anything is not in good shape):\n${SITE_URL}\n\nThank you,\nViTrox College Store Room`,
+      `\n\nWhen you bring them back, press "Return" in the VCLG Store Room app (and tick "Damaged or missing?" if anything is not in good shape):\n${SITE_URL}\n\nThank you,\nVCLG Store Room`,
   };
 }
 
@@ -125,7 +125,7 @@ async function runDayAheadReminders(today, log, result) {
     }
     if (collections.length) {
       const told = await sendAlertEmail(
-        `[ViTrox Store] Tomorrow: ${plural(collections.length, 'event collects', 'events collect')} items`,
+        `[VCLG Store Room] Tomorrow: ${plural(collections.length, 'event collects', 'events collect')} items`,
         collections.map((b) => `${b.event} — ${b.venue || ''} (booked by ${b.name}${b.email ? `, ${b.email}` : ''})\n${eventItems(b)}`).join('\n\n') + `\n\nEvents: ${SITE_URL}`
       );
       if (told.sent || result.collectionEmails) collections.forEach((b) => (byEvent[b.id] = today));

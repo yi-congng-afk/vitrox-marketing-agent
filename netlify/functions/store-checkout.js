@@ -352,7 +352,7 @@ exports.handler = async (event) => {
 
   if (crossedLowStock.length > 0) {
     await sendAlertEmail(
-      `[ViTrox Store] Low stock: ${crossedLowStock.map((i) => i.name).join(', ')}`,
+      `[VCLG Store Room] Low stock: ${crossedLowStock.map((i) => i.name).join(', ')}`,
       `These items are now at or below their low-stock threshold:\n\n` +
         crossedLowStock
           .map((i) => `- ${i.name}: ${i.quantity} ${i.unit || 'pcs'} left (threshold ${i.lowStockThreshold})`)

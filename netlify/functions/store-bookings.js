@@ -201,13 +201,13 @@ exports.handler = async (event) => {
       if (outcome.clashes.length) {
         const short = outcome.clashes.map((c) => `"${c.itemName}" ${c.wanted} wanted, ${c.available} free`).join('; ');
         await audit(event, 'booking.override', `Booked ${describe(b)} over the available stock: ${short}`);
-        await sendAlertEmail(`[ViTrox Store] Booked over the available stock: "${b.event}"`, `${describe(b)} was booked by an admin / Store Manager although there was not enough:\n${short}\n\nPlease make sure the other events have agreed. ${SITE_URL}`);
+        await sendAlertEmail(`[VCLG Store Room] Booked over the available stock: "${b.event}"`, `${describe(b)} was booked by an admin / Store Manager although there was not enough:\n${short}\n\nPlease make sure the other events have agreed. ${SITE_URL}`);
       }
       await tellBooker(
         b,
-        `[ViTrox Store] Booking confirmed: "${b.event}" (${dates(b)})`,
+        `[VCLG Store Room] Booking confirmed: "${b.event}" (${dates(b)})`,
         `Hi ${b.name},\n\nYour event "${b.event}" is booked for ${dates(b)}${b.venue ? ` at ${b.venue}` : ''}. ${(b.lines || []).length ? 'These items are reserved for it:' : 'No items are reserved yet — you can add them by editing the event.'}\n\n${itemList(b)}\n\n` +
-          `Collect them on ${fmtDay(b.startDate)} with "Move out" on the event, and return them by ${fmtDay(b.endDate)}. You will get a reminder the day before.\n${SITE_URL}\n\nViTrox College Store Room`
+          `Collect them on ${fmtDay(b.startDate)} with "Move out" on the event, and return them by ${fmtDay(b.endDate)}. You will get a reminder the day before.\n${SITE_URL}\n\nVCLG Store Room`
       );
       return json(201, { booking: b, clashes: outcome.clashes });
     }
@@ -300,8 +300,8 @@ exports.handler = async (event) => {
         await audit(event, 'booking.cancel', `Cancelled booking ${describe(outcome.booking)}`);
         await tellBooker(
           outcome.booking,
-          `[ViTrox Store] Your booking "${outcome.booking.event}" was cancelled`,
-          `Hi ${outcome.booking.name},\n\nYour event booking "${outcome.booking.event}" (${dates(outcome.booking)}) was cancelled by ${access.user ? access.user.name : 'an admin'}${body.reason ? `: ${tidy(body.reason, 200)}` : '.'}\n\nThe items it reserved are free again:\n${itemList(outcome.booking)}\n\nQuestions? Reply to this email. ${SITE_URL}\n\nViTrox College Store Room`
+          `[VCLG Store Room] Your booking "${outcome.booking.event}" was cancelled`,
+          `Hi ${outcome.booking.name},\n\nYour event booking "${outcome.booking.event}" (${dates(outcome.booking)}) was cancelled by ${access.user ? access.user.name : 'an admin'}${body.reason ? `: ${tidy(body.reason, 200)}` : '.'}\n\nThe items it reserved are free again:\n${itemList(outcome.booking)}\n\nQuestions? Reply to this email. ${SITE_URL}\n\nVCLG Store Room`
         );
       }
       return json(200, { booking: outcome.booking });

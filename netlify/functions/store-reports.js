@@ -68,7 +68,7 @@ exports.handler = async (event) => {
     await saveReports(reports);
 
     await sendAlertEmail(
-      `[ViTrox Store] ${type === 'damage' ? 'Damage report' : 'Restock request'}: ${item.name}`,
+      `[VCLG Store Room] ${type === 'damage' ? 'Damage report' : 'Restock request'}: ${item.name}`,
       `${type === 'damage' ? 'Damage reported' : 'Restock requested'} for "${item.name}".\n\n` +
         `By: ${report.name} (${report.employeeNo})\n` +
         (report.quantity !== null ? `Quantity affected: ${report.quantity}\n` : '') +
