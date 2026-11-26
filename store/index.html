@@ -36,6 +36,7 @@
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
     <symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 16v-5"/><path d="M12 16V8"/><path d="M17 16v-9"/></symbol>
     <symbol id="i-calendar" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></symbol>
     <symbol id="i-qr" viewBox="0 0 24 24"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></symbol>
   </svg>
@@ -113,12 +114,62 @@
       </div>
 
       <nav class="view-tabs" role="tablist" aria-label="Sections">
-        <button type="button" class="view-tab active" role="tab" aria-selected="true" data-view="inventory"><svg class="icon" aria-hidden="true"><use href="#i-package"/></svg> Inventory</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="dashboard"><svg class="icon" aria-hidden="true"><use href="#i-chart"/></svg> Dashboard</button>
+        <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="inventory"><svg class="icon" aria-hidden="true"><use href="#i-package"/></svg> Inventory</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="calendar"><svg class="icon" aria-hidden="true"><use href="#i-calendar"/></svg> Calendar</button>
         <button type="button" class="view-tab" role="tab" aria-selected="false" data-view="events"><svg class="icon" aria-hidden="true"><use href="#i-flag"/></svg> Events</button>
+        <button type="button" class="view-tab admin-only" role="tab" aria-selected="false" data-view="reports" hidden><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Reports</button>
       </nav>
 
-      <section id="view-inventory" class="view">
+      <section id="view-dashboard" class="view" hidden>
+        <div id="dash-actions" class="dash-actions"></div>
+        <h2 class="dash-heading">Inventory</h2>
+        <div id="dash-inventory" class="dash-tiles"></div>
+        <h2 class="dash-heading">Events &amp; bookings</h2>
+        <div id="dash-events" class="dash-tiles"></div>
+        <h2 class="dash-heading">Next 7 days: collections, returns &amp; overdue</h2>
+        <div id="dash-upcoming" class="dash-upcoming"></div>
+      </section>
+
+      <section id="view-reports" class="view" hidden>
+        <div class="view-head">
+          <h2>Reports</h2>
+          <button id="rp-all-btn" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> All reports (Excel)</button>
+        </div>
+        <div class="report-controls">
+          <label>Report
+            <select id="rp-type">
+              <option value="inventory">Inventory listing</option>
+              <option value="availability">Stock availability</option>
+              <option value="lowstock">Low-stock items</option>
+              <option value="borrowing">Borrowing history</option>
+              <option value="returns">Return history</option>
+              <option value="overdue">Overdue items</option>
+              <option value="events">Event booking history</option>
+              <option value="popular">Most frequently borrowed / used items</option>
+              <option value="adjustments">Stock adjustments</option>
+              <option value="cancelled">Cancelled bookings</option>
+            </select>
+          </label>
+          <span id="rp-dates" class="report-dates">
+            <label>From <input id="rp-from" type="date" /></label>
+            <label>To <input id="rp-to" type="date" /></label>
+          </span>
+          <span class="report-downloads">
+            <button id="rp-xlsx-btn" type="button" class="primary-btn"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Excel</button>
+            <button id="rp-csv-btn" type="button" class="ghost-btn"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> CSV</button>
+          </span>
+        </div>
+        <p id="rp-summary" class="muted-text"></p>
+        <div class="table-scroll">
+          <table class="history-table report-table">
+            <thead id="rp-head"></thead>
+            <tbody id="rp-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="view-inventory" class="view" hidden>
       <div class="toolbar">
         <div class="search-box">
           <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
@@ -909,6 +960,7 @@
   <div id="toast-container" role="status" aria-live="polite"></div>
 
   <div id="print-area" aria-hidden="true"></div>
+  <script src="xlsx-lite.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

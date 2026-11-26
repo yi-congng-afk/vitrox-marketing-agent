@@ -223,6 +223,8 @@ function updateAdminUI() {
   adminUIUnlocked = unlocked;
   if (changed) {
     if (!unlocked) showArchived = false;
+    if (!unlocked && currentView === 'reports') showView('dashboard');
+    else if (currentView === 'dashboard') renderDashboard();
     if (itemsLoaded) {
       renderCategoryChips();
       renderGrid();
@@ -1265,6 +1267,7 @@ function applyItems(nextItems, nextCategories, { fromCache = false } = {}) {
   renderGrid();
   renderLowStockBanner();
   refreshOpenViews();
+  if (typeof currentView !== 'undefined' && (currentView === 'dashboard' || currentView === 'reports')) refreshEventViews();
   return true;
 }
 
@@ -2854,21 +2857,389 @@ async function deleteBooking(b) {
   refreshEventViews();
 }
 
-// ---------- Sections: Inventory · Calendar · Events ----------
+// ---------- Dashboard ----------
+// Every figure is worked out from the live stock, events and loans.
 
-let currentView = 'inventory';
+let openReportCount = 0;
+
+async function loadDashboardData() {
+  const [ok, reports] = await Promise.all([loadEventData(), request(`${API.reports}?status=open`)]);
+  if (reports.ok) openReportCount = (reports.data.reports || []).length;
+  return ok;
+}
+
+function dashboardFigures() {
+  const today = todayStr();
+  const in7 = addDays(today, 7);
+  const active = activeItems();
+  const sum = (list, fn) => list.reduce((s, x) => s + (fn(x) || 0), 0);
+  const reservedFor = (item) => liveBookingsFor(item.id).reduce((s, b) => s + bookingQty(b, item.id), 0);
+  const openLoans = allLoans.filter((l) => l.status === 'open');
+  const live = allBookings.filter((b) => b.status !== 'cancelled');
+  return {
+    items: active.length,
+    stock: sum(active, (i) => i.quantity),
+    available: sum(active, availableQty),
+    onLoan: sum(active, (i) => (i.returnable ? i.quantityOnLoan : 0)),
+    reserved: sum(active, reservedFor),
+    damaged: sum(active, (i) => i.quantityDamaged),
+    low: lowStockItems(),
+    overdue: openLoans.filter(isOverdue),
+    upcoming: live.filter((b) => b.status === 'booked' && b.startDate > today),
+    today: live.filter((b) => b.startDate <= today && b.endDate >= today),
+    activeBookings: allBookings.filter((b) => isLiveBooking(b) && (b.lines || []).length),
+    collections: allBookings.filter((b) => b.status === 'booked' && (b.lines || []).length && b.startDate >= today && b.startDate <= in7),
+    returns: openLoans.filter((l) => l.expectedReturnDate && l.expectedReturnDate >= today && l.expectedReturnDate <= in7),
+    notCollected: allBookings.filter((b) => b.status === 'booked' && b.endDate < today && (b.lines || []).length),
+    completed: allBookings.filter((b) => eventState(b) === 'returned' && b.endDate >= addDays(today, -30)),
+  };
+}
+
+function tile(num, label, sub, go, tone) {
+  return (
+    `<button type="button" class="dash-tile${tone ? ` t-${tone}` : ''}" data-go="${go}">` +
+    `<span class="dash-num">${escapeHtml(String(num))}</span><span class="dash-label">${escapeHtml(label)}</span>` +
+    (sub ? `<span class="dash-sub">${escapeHtml(sub)}</span>` : '') +
+    `</button>`
+  );
+}
+
+function renderDashboard() {
+  const f = dashboardFigures();
+  const admin = isAdminUnlocked();
+  el('dash-actions').innerHTML = [
+    admin ? `<button type="button" class="ghost-btn" data-go="add-item">${icon('plus')} Add New Item</button>` : '',
+    `<button type="button" class="primary-btn" data-go="create-event">${icon('calendar')} Create Event</button>`,
+    `<button type="button" class="ghost-btn" data-go="book-items">${icon('cart')} Book Items</button>`,
+    `<button type="button" class="ghost-btn sky-btn" data-go="returns">${icon('return')} Process Return</button>`,
+    `<button type="button" class="ghost-btn" data-go="calendar">${icon('calendar')} View Calendar</button>`,
+    admin ? `<button type="button" class="ghost-btn" data-go="labels">${icon('qr')} Generate QR Labels</button>` : '',
+  ].join('');
+  el('dash-inventory').innerHTML = [
+    tile(f.items, 'Registered items', 'In use (not archived)', 'inventory'),
+    tile(f.stock, 'Total stock', 'Physical units', 'inventory'),
+    tile(f.available, 'Available now', 'Ready to take out', 'inventory', 'ok'),
+    tile(f.onLoan, 'On loan', 'Out with staff', 'returns', f.onLoan ? 'active' : ''),
+    tile(f.reserved, 'Reserved', 'Booked for upcoming events', 'events', f.reserved ? 'event' : ''),
+    tile(f.low.length, 'Low-stock items', f.low.slice(0, 2).map((i) => i.name).join(', '), 'low-stock', f.low.length ? 'warn' : ''),
+    tile(f.overdue.length, 'Overdue loans', f.overdue.length ? `${plural(sum(f.overdue), 'item', 'items')} not back` : 'Nothing overdue', 'overdue', f.overdue.length ? 'bad' : ''),
+    tile(f.damaged, 'Held as damaged', 'Waiting for repair / write-off', 'alerts', f.damaged ? 'bad' : ''),
+  ].join('');
+  el('dash-events').innerHTML = [
+    tile(f.today.length, "Today's events", f.today.map((b) => b.event).slice(0, 2).join(', '), 'events', f.today.length ? 'event' : ''),
+    tile(f.upcoming.length, 'Upcoming events', f.upcoming[0] ? `Next: ${f.upcoming.sort((a, b) => a.startDate.localeCompare(b.startDate))[0].event}` : '', 'events', 'event'),
+    tile(f.activeBookings.length, 'Active bookings', 'Items reserved, not collected', 'events'),
+    tile(f.collections.length, 'Collections (7 days)', 'Events whose items go out soon', 'events', f.collections.length ? 'active' : ''),
+    tile(f.returns.length, 'Returns due (7 days)', 'Loans due back soon', 'returns', f.returns.length ? 'active' : ''),
+    tile(f.notCollected.length, 'Not collected', 'Past events never collected', 'events-past', f.notCollected.length ? 'warn' : ''),
+    tile(f.completed.length, 'Recently completed', 'Events finished, all returned (30 days)', 'events-past', 'ok'),
+    tile(openReportCount, 'Open reports', 'Damage, missing, restock', 'alerts', openReportCount ? 'warn' : ''),
+  ].join('');
+
+  // The next week: collections and returns, soonest first.
+  const today = todayStr();
+  const soon = [
+    ...f.collections.map((b) => ({ day: b.startDate, kind: 'Collect', text: b.event, sub: linesSummary(b.lines), ref: b.id, tone: 'event' })),
+    ...f.returns.map((l) => ({ day: l.expectedReturnDate, kind: 'Return', text: `${l.itemName} × ${loanOutstanding(l)}`, sub: `${l.name} · ${l.purpose}`, loan: true, tone: 'active' })),
+    ...f.overdue.map((l) => ({ day: l.expectedReturnDate, kind: 'Overdue', text: `${l.itemName} × ${loanOutstanding(l)}`, sub: `${l.name} · ${l.purpose}`, loan: true, tone: 'overdue' })),
+  ].sort((a, b) => a.day.localeCompare(b.day));
+  el('dash-upcoming').innerHTML = soon.length
+    ? soon
+        .slice(0, 12)
+        .map(
+          (x) =>
+            `<button type="button" class="dash-row s-${x.tone}" ${x.ref ? `data-event-ref="${escapeHtml(x.ref)}"` : 'data-go="returns"'}>` +
+            `<span class="dash-row-day">${x.day === today ? 'Today' : escapeHtml(fmtDate(x.day))}</span>` +
+            `<span class="status-pill s-${x.tone === 'overdue' ? 'overdue' : x.tone}">${escapeHtml(x.kind)}</span>` +
+            `<span class="dash-row-text"><strong>${escapeHtml(x.text)}</strong><span class="muted-text">${escapeHtml(x.sub || '')}</span></span></button>`
+        )
+        .join('')
+    : '<p class="muted-text">No collections or returns in the next 7 days.</p>';
+
+  function sum(loans) {
+    return loans.reduce((s, l) => s + loanOutstanding(l), 0);
+  }
+}
+
+el('view-dashboard').addEventListener('click', (e) => {
+  const ev = e.target.closest('[data-event-ref]');
+  if (ev) {
+    openEventDetail(ev.dataset.eventRef);
+    return;
+  }
+  const btn = e.target.closest('[data-go]');
+  if (!btn) return;
+  const go = btn.dataset.go;
+  if (go === 'inventory') showView('inventory');
+  else if (go === 'low-stock') {
+    showView('inventory');
+    sortMode = 'low';
+    el('sort-select').value = 'low';
+    renderGrid();
+  } else if (go === 'events' || go === 'events-past') {
+    eventsFilter = go === 'events' ? 'upcoming' : 'past';
+    showView('events');
+  } else if (go === 'calendar') showView('calendar');
+  else if (go === 'returns') openLoansPanel('open');
+  else if (go === 'overdue') {
+    loansSearch = '';
+    el('loans-search').value = '';
+    openLoansPanel('open');
+  } else if (go === 'alerts') el('reports-btn').click();
+  else if (go === 'create-event' || go === 'book-items') {
+    showView('events');
+    openEventForm({});
+  } else if (go === 'add-item') requireAdminThen(() => openItemForm(null));
+  else if (go === 'labels') requireAdminThen(() => openLabelsModal());
+});
+
+// ---------- Reports (admins and Store Managers) ----------
+
+const REPORTS = {
+  inventory: { label: 'Inventory listing', dated: false },
+  availability: { label: 'Stock availability', dated: false },
+  lowstock: { label: 'Low-stock items', dated: false },
+  borrowing: { label: 'Borrowing history', dated: true },
+  returns: { label: 'Return history', dated: true },
+  overdue: { label: 'Overdue items', dated: false },
+  events: { label: 'Event booking history', dated: true },
+  popular: { label: 'Most frequently borrowed / used items', dated: true },
+  adjustments: { label: 'Stock adjustments', dated: true },
+  cancelled: { label: 'Cancelled bookings', dated: true },
+};
+
+let reportTxns = [];
+let reportReports = [];
+
+async function loadReportData() {
+  const [, txns, reps] = await Promise.all([loadEventData(), request(API.txns), request(API.reports)]);
+  if (txns.ok) reportTxns = txns.data.transactions || [];
+  if (reps.ok) reportReports = reps.data.reports || [];
+}
+
+function inRange(day) {
+  const from = el('rp-from').value;
+  const to = el('rp-to').value;
+  return Boolean(day) && (!from || day >= from) && (!to || day <= to);
+}
+
+function designOf(x) {
+  return x.variationName || '';
+}
+
+// [header, ...rows] for the chosen report.
+function reportRows(kind) {
+  const reserved = (item) => liveBookingsFor(item.id).reduce((s, b) => s + bookingQty(b, item.id), 0);
+  const today = todayStr();
+  switch (kind) {
+    case 'inventory':
+      return [
+        ['Item Code', 'Name', 'Category', 'Unit', 'Total', 'Loanable', 'Low-stock Alert At', 'Storage Location', 'Design Variations', 'Status', 'Notes'],
+        ...items
+          .slice()
+          .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+          .map((i) => [
+            i.code || '', i.name, i.category, i.unit || 'pcs', i.quantity, i.returnable ? 'Yes' : 'No', i.lowStockThreshold, i.locationText || '',
+            i.hasVariations ? (i.variations || []).filter((v) => v.active).map((v) => `${v.code} ${v.name}`).join('; ') : '', i.archived ? 'Archived' : 'In use', i.notes || '',
+          ]),
+      ];
+    case 'availability':
+      return [
+        ['Item Code', 'Name', 'Category', 'Total', 'On Loan', 'Held as Damaged', 'Reserved (upcoming events)', 'Available Now', 'Unit'],
+        ...activeItems().map((i) => [i.code || '', i.name, i.category, i.quantity, i.returnable ? i.quantityOnLoan || 0 : 0, i.quantityDamaged || 0, reserved(i), availableQty(i), i.unit || 'pcs']),
+      ];
+    case 'lowstock':
+      return [
+        ['Item Code', 'Name', 'Category', 'Available Now', 'Alert At', 'Total', 'Shortfall to Alert Level', 'Unit'],
+        ...lowStockItems().map((i) => [i.code || '', i.name, i.category, availableQty(i), i.lowStockThreshold, i.quantity, Math.max(0, i.lowStockThreshold - availableQty(i)), i.unit || 'pcs']),
+      ];
+    case 'borrowing':
+      return [
+        ['Borrowed', 'Item', 'Design', 'Quantity', 'Borrowed By', 'Employee No', 'Email', 'Purpose / Event', 'Due Back', 'Status', 'Returned', 'Damaged', 'Missing'],
+        ...allLoans
+          .filter((l) => inRange(isoDay(l.loanedAt)))
+          .sort((a, b) => b.loanedAt.localeCompare(a.loanedAt))
+          .map((l) => [
+            csvDateTime(l.loanedAt), l.itemName, designOf(l), l.quantity, l.name, l.employeeNo || '', l.email || '', l.purpose, l.expectedReturnDate || '',
+            l.status === 'returned' ? 'Returned' : isOverdue(l) ? 'Overdue' : 'Out', l.quantityReturned, l.quantityDamaged || 0, l.quantityMissing || 0,
+          ]),
+      ];
+    case 'returns': {
+      const rows = [];
+      allLoans.forEach((l) =>
+        (l.returns || []).forEach((r) => {
+          if (r.adjustment || !inRange(isoDay(r.returnedAt))) return;
+          rows.push({ at: r.returnedAt, row: [csvDateTime(r.returnedAt), l.itemName, designOf(l), r.quantity - (r.damaged || 0), r.damaged || 0, r.missing || 0, r.conditionNote || r.notes || '', r.name, l.name, l.purpose, l.expectedReturnDate || '', l.expectedReturnDate && isoDay(r.returnedAt) > l.expectedReturnDate ? 'Late' : 'On time'] });
+        })
+      );
+      rows.sort((a, b) => b.at.localeCompare(a.at));
+      return [['Returned', 'Item', 'Design', 'Good', 'Damaged', 'Missing', 'Notes', 'Returned By', 'Borrower', 'Purpose / Event', 'Was Due', 'Timing'], ...rows.map((x) => x.row)];
+    }
+    case 'overdue':
+      return [
+        ['Item', 'Design', 'Not Returned', 'Borrower', 'Employee No', 'Email', 'Purpose / Event', 'Due Back', 'Days Overdue'],
+        ...allLoans
+          .filter(isOverdue)
+          .sort((a, b) => a.expectedReturnDate.localeCompare(b.expectedReturnDate))
+          .map((l) => [l.itemName, designOf(l), loanOutstanding(l), l.name, l.employeeNo || '', l.email || '', l.purpose, l.expectedReturnDate, Math.round((parseYmd(today) - parseYmd(l.expectedReturnDate)) / 86400000)]),
+      ];
+    case 'events':
+      return [
+        ['Start', 'End', 'Event', 'Category', 'Venue', 'Organiser', 'Department', 'Contact', 'Booked By', 'Items', 'Status'],
+        ...allBookings
+          .filter((b) => inRange(b.startDate))
+          .sort((a, b) => b.startDate.localeCompare(a.startDate))
+          .map((b) => [b.startDate, b.endDate, b.event, b.category || '', b.venue || '', b.organiser || '', b.department || '', b.contact || '', b.name, linesSummary(b.lines), STATE_LABEL[eventState(b)]]),
+      ];
+    case 'popular': {
+      const tally = new Map();
+      const add = (id, name, kind, qty, at) => {
+        const t = tally.get(id) || { name, kind, times: 0, qty: 0, last: '' };
+        t.times += 1;
+        t.qty += qty;
+        if (at > t.last) t.last = at;
+        tally.set(id, t);
+      };
+      allLoans.filter((l) => inRange(isoDay(l.loanedAt))).forEach((l) => add(l.itemId, l.itemName, 'Borrowed (loanable)', l.quantity, l.loanedAt));
+      reportTxns.filter((t) => t.type === 'remove' && inRange(isoDay(t.timestamp))).forEach((t) => add(t.itemId, t.itemName, 'Used (consumable)', t.quantity, t.timestamp));
+      return [
+        ['Rank', 'Item', 'Kind', 'Times Taken Out', 'Total Quantity', 'Last Taken Out'],
+        ...[...tally.values()].sort((a, b) => b.times - a.times || b.qty - a.qty).map((t, i) => [i + 1, t.name, t.kind, t.times, t.qty, csvDateTime(t.last)]),
+      ];
+    }
+    case 'adjustments': {
+      const rows = [];
+      reportTxns
+        .filter((t) => t.type === 'add' && inRange(isoDay(t.timestamp)))
+        .forEach((t) => rows.push({ at: t.timestamp, row: [csvDateTime(t.timestamp), t.itemName, `+${t.quantity}`, t.unusedReturn ? 'Unused items returned from an event' : 'Stock added', t.remarks || '', t.name] }));
+      allLoans.forEach((l) =>
+        (l.returns || []).forEach((r) => {
+          if (r.missing && inRange(isoDay(r.returnedAt))) rows.push({ at: r.returnedAt, row: [csvDateTime(r.returnedAt), l.itemName, `-${r.missing}`, 'Missing on return', r.conditionNote || '', r.name] });
+        })
+      );
+      const OUT = { written_off: ['-', 'Damaged items written off'], repaired: ['±0', 'Damaged items repaired — back in use'], found: ['+', 'Missing items found'] };
+      reportReports
+        .filter((r) => r.status === 'resolved' && r.outcome && inRange(isoDay(r.resolvedAt)))
+        .forEach((r) => {
+          if (r.type === 'missing' && r.outcome === 'written_off') return; // already counted when it went missing
+          const [sign, why] = OUT[r.outcome];
+          rows.push({ at: r.resolvedAt, row: [csvDateTime(r.resolvedAt), r.itemName, sign === '±0' ? '0' : `${sign}${r.quantity}`, why, r.message, ''] });
+        });
+      rows.sort((a, b) => b.at.localeCompare(a.at));
+      return [['Date', 'Item', 'Change', 'Reason', 'Details', 'By'], ...rows.map((x) => x.row)];
+    }
+    case 'cancelled':
+      return [
+        ['Cancelled', 'Event', 'Start', 'End', 'Venue', 'Booked By', 'Cancelled By', 'Items'],
+        ...allBookings
+          .filter((b) => b.status === 'cancelled' && inRange(isoDay(b.cancelledAt) || b.startDate))
+          .sort((a, b) => String(b.cancelledAt).localeCompare(String(a.cancelledAt)))
+          .map((b) => [csvDateTime(b.cancelledAt), b.event, b.startDate, b.endDate, b.venue || '', b.name, b.cancelledBy || '', linesSummary(b.lines)]),
+      ];
+    default:
+      return [[]];
+  }
+}
+
+const REPORT_PREVIEW_ROWS = 200;
+
+function renderReport() {
+  const kind = el('rp-type').value;
+  const conf = REPORTS[kind];
+  el('rp-dates').hidden = !conf.dated;
+  const [head, ...rows] = reportRows(kind);
+  el('rp-head').innerHTML = `<tr>${head.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr>`;
+  el('rp-body').innerHTML = rows.length
+    ? rows
+        .slice(0, REPORT_PREVIEW_ROWS)
+        .map((r) => `<tr>${r.map((c) => `<td>${escapeHtml(c === null || c === undefined ? '' : c)}</td>`).join('')}</tr>`)
+        .join('')
+    : `<tr><td colspan="${head.length}" class="muted-cell">Nothing to show${conf.dated ? ' for these dates' : ''}.</td></tr>`;
+  el('rp-summary').textContent =
+    `${plural(rows.length, 'row', 'rows')}${conf.dated ? ` · ${el('rp-from').value ? fmtDate(el('rp-from').value) : 'the start'} to ${el('rp-to').value ? fmtDate(el('rp-to').value) : 'today'}` : ' · as of now'}` +
+    (rows.length > REPORT_PREVIEW_ROWS ? ` · showing the first ${REPORT_PREVIEW_ROWS} here; the download has them all` : '');
+}
+
+function reportFileName(kind, ext) {
+  const conf = REPORTS[kind];
+  const slug = conf.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const range = conf.dated ? `-${el('rp-from').value || 'start'}-to-${el('rp-to').value || todayStr()}` : `-${todayStr()}`;
+  return `vitrox-store-${slug}${range}.${ext}`;
+}
+
+function downloadXlsx(filename, sheets) {
+  const bytes = window.XlsxLite.build(sheets);
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+el('rp-type').addEventListener('change', renderReport);
+el('rp-from').addEventListener('change', renderReport);
+el('rp-to').addEventListener('change', renderReport);
+el('rp-csv-btn').addEventListener('click', () => {
+  const kind = el('rp-type').value;
+  downloadCsv(reportFileName(kind, 'csv'), reportRows(kind));
+});
+el('rp-xlsx-btn').addEventListener('click', () => {
+  const kind = el('rp-type').value;
+  downloadXlsx(reportFileName(kind, 'xlsx'), [{ name: REPORTS[kind].label, rows: reportRows(kind) }]);
+});
+el('rp-all-btn').addEventListener('click', () => {
+  // Every report in one workbook, one sheet each.
+  downloadXlsx(
+    `vitrox-store-all-reports-${todayStr()}.xlsx`,
+    Object.keys(REPORTS).map((kind) => ({ name: REPORTS[kind].label.replace('Most frequently borrowed / used items', 'Most borrowed or used'), rows: reportRows(kind) }))
+  );
+});
+
+function initReportDates() {
+  if (el('rp-from').value || el('rp-to').value) return;
+  const d = new Date();
+  d.setMonth(d.getMonth() - 3);
+  el('rp-from').value = ymdOf(d);
+  // Ahead too, so upcoming events show in the event reports.
+  el('rp-to').value = addDays(todayStr(), 90);
+}
+
+
+// ---------- Sections: Dashboard · Inventory · Calendar · Events · Reports ----------
+
+const VIEW_KEY = 'vitroxStoreView';
+let currentView = 'dashboard';
 
 function showView(view) {
-  if (!['inventory', 'calendar', 'events'].includes(view)) view = 'inventory';
+  if (!['dashboard', 'inventory', 'calendar', 'events', 'reports'].includes(view)) view = 'dashboard';
+  if (view === 'reports' && !isAdminUnlocked()) view = 'dashboard';
   currentView = view;
+  try {
+    sessionStorage.setItem(VIEW_KEY, view);
+  } catch {
+    // Not remembered on reload; harmless.
+  }
   document.querySelectorAll('.view-tab').forEach((tab) => {
     const on = tab.dataset.view === view;
     tab.classList.toggle('active', on);
     tab.setAttribute('aria-selected', String(on));
   });
-  ['inventory', 'calendar', 'events'].forEach((v) => {
+  ['dashboard', 'inventory', 'calendar', 'events', 'reports'].forEach((v) => {
     el(`view-${v}`).hidden = v !== view;
   });
+  if (view === 'dashboard') {
+    renderDashboard();
+    loadDashboardData().then(() => currentView === 'dashboard' && renderDashboard());
+  }
+  if (view === 'reports') {
+    initReportDates();
+    renderReport();
+    loadReportData().then(() => currentView === 'reports' && renderReport());
+  }
   if (view === 'calendar') {
     renderCalendar();
     loadEventData().then(() => currentView === 'calendar' && renderCalendar());
@@ -2892,6 +3263,8 @@ async function loadEventData() {
 }
 
 function refreshEventViews() {
+  if (currentView === 'dashboard') renderDashboard();
+  if (currentView === 'reports') renderReport();
   if (currentView === 'calendar') renderCalendar();
   if (currentView === 'events') renderEventsList();
   if (!el('event-modal').hidden && shownEventId) renderEventDetail(shownEventId);
@@ -5175,6 +5548,7 @@ function followPendingLink() {
     else showToast('That label is for an item that is no longer in the store.', 'error');
     return;
   }
+  showView('inventory');
   activeCategory = 'All';
   renderCategoryChips();
   el('search-input').value = link.loc;
@@ -5275,6 +5649,13 @@ loadItems();
 loadReportsBadge();
 loadBookings();
 checkSession();
+showView((() => {
+  try {
+    return sessionStorage.getItem(VIEW_KEY) || 'dashboard';
+  } catch {
+    return 'dashboard';
+  }
+})());
 
 // Google's script loads on its own schedule: start now if it is already here,
 // otherwise it calls initGoogle itself. If it never arrives, say so.
