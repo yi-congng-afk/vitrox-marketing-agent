@@ -1,4 +1,4 @@
-const { getLoans, getReminderLog, saveReminderLog } = require('./store-blobs');
+const { getLoans, getBookings, getReminderLog, saveReminderLog } = require('./store-blobs');
 const { sendEmail, sendAlertEmail, emailConfigured } = require('./mailer');
 
 // A person with overdue items is reminded the day after the due date, then
@@ -68,6 +68,89 @@ function adminSummary(reminded, failed, noEmail, today) {
   };
 }
 
+// ---- The day before: collections and returns due tomorrow ----
+
+function addDaysYmd(ymd, n) {
+  return new Date(Date.parse(ymd + 'T00:00:00Z') + n * DAY_MS).toISOString().slice(0, 10);
+}
+
+function eventItems(b) {
+  return (b.lines || []).map((l) => `- ${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${l.quantity}`).join('\n');
+}
+
+function collectionEmail(b) {
+  return {
+    subject: `[ViTrox Store] Tomorrow: collect the items for "${b.event}"`,
+    text:
+      `Hi ${b.name || 'there'},\n\n` +
+      `Your event "${b.event}" starts tomorrow (${fmtDate(b.startDate)}${b.venue ? `, ${b.venue}` : ''}). These items are reserved for it:\n\n` +
+      eventItems(b) +
+      `\n\nCollect them from the store room and press "Move out" on the event in the store dashboard, so they are recorded as out:\n${SITE_URL}\n\n` +
+      `They are due back by ${fmtDate(b.endDate)}. Not needed any more? Please cancel the event there, so the items are free for others.\n\n` +
+      `Thank you,\nViTrox College Store Room`,
+  };
+}
+
+function dueTomorrowEmail(loans) {
+  const first = loans[0];
+  return {
+    subject: `[ViTrox Store] Reminder: ${plural(loans.reduce((s, l) => s + (l.quantity - l.quantityReturned - (l.quantityMissing || 0)), 0), 'item is', 'items are')} due back tomorrow`,
+    text:
+      `Hi ${first.name || 'there'},\n\nA friendly reminder — these items from the ViTrox College store room are due back tomorrow (${fmtDate(first.expectedReturnDate)}):\n\n` +
+      loans.map((l) => `- ${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${l.quantity - l.quantityReturned - (l.quantityMissing || 0)} — for ${l.purpose || 'no purpose given'}`).join('\n') +
+      `\n\nWhen you bring them back, press "Return" in the store dashboard (and tick "Damaged or missing?" if anything is not in good shape):\n${SITE_URL}\n\nThank you,\nViTrox College Store Room`,
+  };
+}
+
+// Reminds people a day ahead. Each event / loan is reminded once.
+async function runDayAheadReminders(today, log, result) {
+  const tomorrow = addDaysYmd(today, 1);
+  const byEvent = { ...(log.byEvent || {}) };
+  const dueSoon = { ...(log.dueSoon || {}) };
+  const [bookings, loans] = await Promise.all([getBookings(), getLoans()]);
+
+  const collections = bookings.filter((b) => b.status === 'booked' && b.startDate === tomorrow && (b.lines || []).length && !byEvent[b.id]);
+  const dueTomorrow = loans.filter(
+    (l) => l.status === 'open' && l.expectedReturnDate === tomorrow && l.quantity - l.quantityReturned - (l.quantityMissing || 0) > 0 && !dueSoon[l.id]
+  );
+  result.collectionsTomorrow = collections.length;
+  result.dueTomorrow = dueTomorrow.length;
+  result.collectionEmails = 0;
+  result.dueTomorrowEmails = 0;
+
+  if (result.emailReady) {
+    for (const b of collections) {
+      const email = String(b.email || '').trim().toLowerCase();
+      if (EMAIL_RE.test(email) && (await sendEmail({ to: email, ...collectionEmail(b) })).sent) result.collectionEmails++;
+    }
+    if (collections.length) {
+      const told = await sendAlertEmail(
+        `[ViTrox Store] Tomorrow: ${plural(collections.length, 'event collects', 'events collect')} items`,
+        collections.map((b) => `${b.event} — ${b.venue || ''} (booked by ${b.name}${b.email ? `, ${b.email}` : ''})\n${eventItems(b)}`).join('\n\n') + `\n\nEvents: ${SITE_URL}`
+      );
+      if (told.sent || result.collectionEmails) collections.forEach((b) => (byEvent[b.id] = today));
+    }
+    const byPerson = new Map();
+    dueTomorrow.forEach((l) => {
+      const email = String(l.email || '').trim().toLowerCase();
+      if (!EMAIL_RE.test(email)) return;
+      if (!byPerson.has(email)) byPerson.set(email, []);
+      byPerson.get(email).push(l);
+    });
+    for (const [email, personLoans] of byPerson) {
+      if ((await sendEmail({ to: email, ...dueTomorrowEmail(personLoans) })).sent) {
+        result.dueTomorrowEmails++;
+        personLoans.forEach((l) => (dueSoon[l.id] = today));
+      }
+    }
+  }
+
+  // Keep the log small: drop entries more than a week old.
+  const cutoff = addDaysYmd(today, -7);
+  [byEvent, dueSoon].forEach((map) => Object.keys(map).forEach((k) => map[k] < cutoff && delete map[k]));
+  return { byEvent, dueSoon };
+}
+
 // Sends the reminders that are due today. Safe to run more than once a day:
 // each loan is only reminded again after REMIND_EVERY_DAYS.
 async function runReminders({ now = new Date(), trigger = 'schedule' } = {}) {
@@ -135,8 +218,15 @@ async function runReminders({ now = new Date(), trigger = 'schedule' } = {}) {
     if (!stillOpen.has(id)) delete byLoan[id];
   });
 
-  await saveReminderLog({ byLoan, lastRun: result });
+  let ahead = { byEvent: log.byEvent || {}, dueSoon: log.dueSoon || {} };
+  try {
+    ahead = await runDayAheadReminders(today, log, result);
+  } catch (err) {
+    result.dayAheadError = String((err && err.message) || err).slice(0, 200);
+  }
+
+  await saveReminderLog({ byLoan, byEvent: ahead.byEvent, dueSoon: ahead.dueSoon, lastRun: result });
   return result;
 }
 
-module.exports = { runReminders, malaysiaToday, REMIND_EVERY_DAYS };
+module.exports = { runReminders, malaysiaToday, REMIND_EVERY_DAYS, SITE_URL };

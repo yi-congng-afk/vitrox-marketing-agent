@@ -1691,7 +1691,37 @@ function renderDetail(item, { resetQty }) {
   setDetailPhoto('location', item.locationImage, `Where ${item.name} is kept`);
   renderDetailStock(item, resetQty);
   renderDetailBookings(item);
+  renderDetailMine(item);
 }
+
+// The signed-in person's own open loans of this item — e.g. after scanning
+// the item's QR label when bringing it back.
+function myOpenLoans(item) {
+  if (!session || !item.returnable) return [];
+  return allLoans.filter((l) => l.itemId === item.id && l.status === 'open' && l.email === session.user.email);
+}
+
+function renderDetailMine(item) {
+  const box = el('detail-mine');
+  const mine = myOpenLoans(item);
+  box.hidden = mine.length === 0;
+  if (!mine.length) {
+    box.innerHTML = '';
+    return;
+  }
+  const count = mine.reduce((s, l) => s + loanOutstanding(l), 0);
+  const due = mine.map((l) => l.expectedReturnDate).filter(Boolean).sort()[0];
+  box.innerHTML =
+    `${icon('return')}<span>You have <strong>${count}</strong> of these out (${escapeHtml([...new Set(mine.map((l) => l.purpose))].join(', '))})` +
+    `${due ? ` — due back ${escapeHtml(fmtDate(due))}` : ''}.</span>` +
+    `<button type="button" class="ghost-btn sky-btn" id="detail-return-mine">${icon('return')} Return mine</button>`;
+}
+
+el('detail-mine').addEventListener('click', (e) => {
+  if (!e.target.closest('#detail-return-mine')) return;
+  const item = items.find((i) => i.id === selectedItemId);
+  if (item) openReturnModal(myOpenLoans(item), { origin: 'detail', checkAll: true });
+});
 
 async function openDetail(itemId) {
   const item = items.find((i) => i.id === itemId);
@@ -1700,11 +1730,12 @@ async function openDetail(itemId) {
   selectedItemId = itemId;
   renderDetail(item, { resetQty: true });
   openModal('detail-modal');
-  loadBookings().then((ok) => {
+  loadEventData().then((ok) => {
     const current = items.find((i) => i.id === itemId);
     if (ok && current && selectedItemId === itemId && !el('detail-modal').hidden) {
       renderDetailBookings(current);
       renderDetailStock(current, false);
+      renderDetailMine(current);
     }
   });
   await loadHistory(itemId, { showLoading: fresh });
@@ -1785,6 +1816,7 @@ function renderHistory() {
     );
   }
   body.innerHTML = rows.join('');
+  labelTableCells(body.closest('table'));
 }
 
 el('detail-history-body').addEventListener('click', (e) => {
@@ -2587,6 +2619,7 @@ function renderLoansPanel() {
   }
 
   updateReturnSelectedButton();
+  labelTableCells(el('loans-body').closest('table'));
 }
 
 el('loans-btn').addEventListener('click', openLoansPanel);
@@ -2855,6 +2888,20 @@ async function deleteBooking(b) {
   closeModal('event-modal');
   await loadEventData();
   refreshEventViews();
+}
+
+// ---------- Phones: tables as cards ----------
+
+// Copies each column heading onto its cells (data-label), so on a narrow
+// screen CSS can show every row as a card of "Heading: value" lines.
+function labelTableCells(table) {
+  if (!table) return;
+  const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+  table.querySelectorAll('tbody tr').forEach((tr) =>
+    [...tr.children].forEach((td, i) => {
+      if (heads[i] && td.colSpan === 1) td.dataset.label = heads[i];
+    })
+  );
 }
 
 // ---------- Dashboard ----------
@@ -3455,6 +3502,7 @@ function renderEventDetail(id) {
     );
   });
   el('ev-d-lines').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5" class="muted-cell">No items reserved yet.</td></tr>';
+  labelTableCells(el('ev-d-lines').closest('table'));
 
   const state = eventState(b);
   const open = loans.filter((l) => l.status === 'open');
@@ -4333,10 +4381,15 @@ function renderReminderStatus(res) {
             (lastRun.noEmail ? `, ${plural(lastRun.noEmail, 'loan', 'loans')} with no email on record` : '') +
             (lastRun.adminNotified ? ' — summary sent to the admin.' : '.'))
       : 'It has not run yet.';
+    const ahead =
+      lastRun && lastRun.collectionsTomorrow !== undefined
+        ? ` Day-ahead: ${plural(lastRun.collectionEmails || 0, 'collection reminder', 'collection reminders')}, ${plural(lastRun.dueTomorrowEmails || 0, '“due tomorrow” email', '“due tomorrow” emails')}.`
+        : '';
     status =
       `<strong>${icon('bell')} Reminder emails are on.</strong> ` +
-      `Every day at 9:00 am, people with overdue items are emailed (again every ${escapeHtml(everyDays)} days until returned), ` +
-      `and the admin gets a summary. ${last}`;
+      `Every day at 9:00 am: people with overdue items are emailed (again every ${escapeHtml(everyDays)} days until returned); ` +
+      `bookers are reminded the day before their event to collect; borrowers get a “due back tomorrow” note; the admin gets summaries. ` +
+      `Bookings also send a confirmation, and a booker is told if someone else cancels their event. ${last}${ahead}`;
   }
   box.innerHTML =
     `<div class="reminder-box"><p>${status}</p>` +

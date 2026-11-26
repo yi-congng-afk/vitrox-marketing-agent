@@ -1959,3 +1959,29 @@ select.needs-choice { border-color: var(--warn); background-color: var(--warn-bg
   .view-tab { padding: 0.5rem 0.5rem; font-size: 0.84rem; gap: 0; }
   .view-tab .icon { display: none; }
 }
+
+/* ---------- Phase 5: phones, "your loans" in the item window ---------- */
+
+.detail-mine {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem;
+  background: var(--sky-soft); border: 1px solid var(--sky-border); color: var(--sky-text);
+  border-radius: var(--radius-sm); padding: 0.55rem 0.75rem; margin: 0.5rem 0; font-size: 0.88rem;
+}
+.detail-mine span { flex: 1 1 14rem; }
+
+@media (max-width: 600px) {
+  table.stack-on-phone thead { display: none; }
+  table.stack-on-phone, table.stack-on-phone tbody, table.stack-on-phone tr, table.stack-on-phone td { display: block; width: 100%; }
+  table.stack-on-phone tr { border-bottom: 1px solid var(--border); padding: 0.55rem 0.7rem; }
+  table.stack-on-phone tr:last-child { border-bottom: none; }
+  table.stack-on-phone td { border: none; padding: 0.12rem 0; white-space: normal; text-align: left; }
+  table.stack-on-phone td[data-label]::before {
+    content: attr(data-label); display: inline-block; min-width: 6.5rem; font-size: 0.72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin-right: 0.4rem;
+  }
+  table.stack-on-phone td:empty, table.stack-on-phone td.row-actions:empty { display: none; }
+  table.stack-on-phone { min-width: 0 !important; }
+  table.stack-on-phone td.row-actions { padding-top: 0.35rem; text-align: left; white-space: normal; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+  table.stack-on-phone td.row-actions::before { display: none; }
+  table.stack-on-phone td input[type="checkbox"] { width: 1.2rem; height: 1.2rem; }
+}

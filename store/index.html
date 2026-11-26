@@ -334,6 +334,7 @@
 
           <div id="detail-variations" class="detail-variations" hidden></div>
           <p id="detail-notes" class="detail-notes"></p>
+          <div id="detail-mine" class="detail-mine" hidden></div>
           <div id="detail-bookings" class="detail-bookings" hidden></div>
           <p id="detail-loanable-note" class="loanable-note" hidden><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> <span>Loanable item — it stays recorded under the borrower's name until it is returned.</span></p>
 
@@ -362,7 +363,7 @@
 
           <h3>Recent activity</h3>
           <div class="table-scroll">
-            <table class="history-table">
+            <table class="history-table stack-on-phone">
               <thead><tr><th>Date</th><th>Type</th><th>Qty</th><th>By</th><th>Remarks</th><th><span class="sr-only">Actions</span></th></tr></thead>
               <tbody id="detail-history-body"></tbody>
             </table>
@@ -516,7 +517,7 @@
         <button id="loans-export-btn" class="ghost-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export (CSV)</button>
       </div>
       <div class="table-scroll">
-        <table class="history-table loans-table">
+        <table class="history-table loans-table stack-on-phone">
           <thead id="loans-head"></thead>
           <tbody id="loans-body"></tbody>
         </table>
@@ -707,7 +708,7 @@
       <p id="ev-d-description" class="event-description"></p>
       <h3>Items</h3>
       <div class="table-scroll">
-        <table class="history-table">
+        <table class="history-table stack-on-phone">
           <thead><tr><th>Item</th><th>Design</th><th>Booked</th><th>Collected</th><th>Returned</th></tr></thead>
           <tbody id="ev-d-lines"></tbody>
         </table>

@@ -1,6 +1,25 @@
 const { getItems, getLoans, getBookings, updateBookings, genId } = require('./_shared/store-blobs');
 const { checkAccess, recordedBy, isManager } = require('./_shared/store-access');
 const { audit } = require('./_shared/audit');
+const { sendEmail, sendAlertEmail } = require('./_shared/mailer');
+
+const SITE_URL = 'https://vitrox-college-store.netlify.app/';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DAY_FMT = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+const fmtDay = (ymd) => DAY_FMT.format(new Date(`${ymd}T00:00:00Z`));
+const dates = (b) => (b.endDate && b.endDate !== b.startDate ? `${fmtDay(b.startDate)} – ${fmtDay(b.endDate)}` : fmtDay(b.startDate));
+const itemList = (b) => ((b.lines || []).length ? b.lines.map((l) => `- ${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${l.quantity}`).join('\n') : '(no items yet)');
+
+// Emails never hold up or break the booking itself.
+async function tellBooker(b, subject, text) {
+  const to = String(b.email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(to)) return;
+  try {
+    await sendEmail({ to, subject, text });
+  } catch {
+    // ignore
+  }
+}
 const { MAX_DAYS, MAX_AHEAD_DAYS, malaysiaToday, validDate, daysBetween, findClashes } = require('./_shared/bookings');
 
 // Event bookings. An event has its details (name, category, dates, venue,
@@ -178,14 +197,19 @@ exports.handler = async (event) => {
         return { save: bookings.concat([booking]), booking, clashes };
       });
       if (outcome.response) return outcome.response;
+      const b = outcome.booking;
       if (outcome.clashes.length) {
-        await audit(
-          event,
-          'booking.override',
-          `Booked ${describe(outcome.booking)} over the available stock: ${outcome.clashes.map((c) => `"${c.itemName}" ${c.wanted} wanted, ${c.available} free`).join('; ')}`
-        );
+        const short = outcome.clashes.map((c) => `"${c.itemName}" ${c.wanted} wanted, ${c.available} free`).join('; ');
+        await audit(event, 'booking.override', `Booked ${describe(b)} over the available stock: ${short}`);
+        await sendAlertEmail(`[ViTrox Store] Booked over the available stock: "${b.event}"`, `${describe(b)} was booked by an admin / Store Manager although there was not enough:\n${short}\n\nPlease make sure the other events have agreed. ${SITE_URL}`);
       }
-      return json(201, { booking: outcome.booking, clashes: outcome.clashes });
+      await tellBooker(
+        b,
+        `[ViTrox Store] Booking confirmed: "${b.event}" (${dates(b)})`,
+        `Hi ${b.name},\n\nYour event "${b.event}" is booked for ${dates(b)}${b.venue ? ` at ${b.venue}` : ''}. ${(b.lines || []).length ? 'These items are reserved for it:' : 'No items are reserved yet — you can add them by editing the event.'}\n\n${itemList(b)}\n\n` +
+          `Collect them on ${fmtDay(b.startDate)} with "Move out" on the event, and return them by ${fmtDay(b.endDate)}. You will get a reminder the day before.\n${SITE_URL}\n\nViTrox College Store Room`
+      );
+      return json(201, { booking: b, clashes: outcome.clashes });
     }
 
     if (!params.id) return json(400, { error: 'Missing id query parameter' });
@@ -272,7 +296,14 @@ exports.handler = async (event) => {
         return { save: bookings.map((b) => (b.id === booking.id ? next : b)), booking: next, own };
       });
       if (outcome.response) return outcome.response;
-      if (!outcome.own) await audit(event, 'booking.cancel', `Cancelled booking ${describe(outcome.booking)}`);
+      if (!outcome.own) {
+        await audit(event, 'booking.cancel', `Cancelled booking ${describe(outcome.booking)}`);
+        await tellBooker(
+          outcome.booking,
+          `[ViTrox Store] Your booking "${outcome.booking.event}" was cancelled`,
+          `Hi ${outcome.booking.name},\n\nYour event booking "${outcome.booking.event}" (${dates(outcome.booking)}) was cancelled by ${access.user ? access.user.name : 'an admin'}${body.reason ? `: ${tidy(body.reason, 200)}` : '.'}\n\nThe items it reserved are free again:\n${itemList(outcome.booking)}\n\nQuestions? Reply to this email. ${SITE_URL}\n\nViTrox College Store Room`
+        );
+      }
       return json(200, { booking: outcome.booking });
     }
   } catch (err) {
