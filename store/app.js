@@ -223,7 +223,7 @@ function updateAdminUI() {
   adminUIUnlocked = unlocked;
   if (changed) {
     if (!unlocked) showArchived = false;
-    if (!unlocked && currentView === 'reports') showView('dashboard');
+    if (!unlocked && currentView === 'reports') showView('inventory');
     else if (currentView === 'dashboard') renderDashboard();
     if (itemsLoaded) {
       renderCategoryChips();
@@ -3258,18 +3258,14 @@ function initReportDates() {
 
 // ---------- Sections: Dashboard · Inventory · Calendar · Events · Reports ----------
 
-const VIEW_KEY = 'vitroxStoreView';
-let currentView = 'dashboard';
+// Inventory first: recording a move-out is what most people come for
+// (including everyone arriving from a scanned QR label).
+let currentView = 'inventory';
 
 function showView(view) {
-  if (!['dashboard', 'inventory', 'calendar', 'events', 'reports'].includes(view)) view = 'dashboard';
-  if (view === 'reports' && !isAdminUnlocked()) view = 'dashboard';
+  if (!['dashboard', 'inventory', 'calendar', 'events', 'reports'].includes(view)) view = 'inventory';
+  if (view === 'reports' && !isAdminUnlocked()) view = 'inventory';
   currentView = view;
-  try {
-    sessionStorage.setItem(VIEW_KEY, view);
-  } catch {
-    // Not remembered on reload; harmless.
-  }
   document.querySelectorAll('.view-tab').forEach((tab) => {
     const on = tab.dataset.view === view;
     tab.classList.toggle('active', on);
@@ -5702,13 +5698,7 @@ loadItems();
 loadReportsBadge();
 loadBookings();
 checkSession();
-showView((() => {
-  try {
-    return sessionStorage.getItem(VIEW_KEY) || 'dashboard';
-  } catch {
-    return 'dashboard';
-  }
-})());
+showView('inventory');
 
 // Google's script loads on its own schedule: start now if it is already here,
 // otherwise it calls initGoogle itself. If it never arrives, say so.
