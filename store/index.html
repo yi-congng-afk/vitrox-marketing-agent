@@ -270,6 +270,10 @@
               <span class="stat-label">On loan</span>
               <span class="stat-value"><strong id="detail-on-loan"></strong> <span id="detail-unit-2"></span></span>
             </div>
+            <div class="stat stat-damaged" id="detail-damaged-row" hidden title="Returned damaged — held until repaired or written off (see Alerts)">
+              <span class="stat-label">Damaged</span>
+              <span class="stat-value"><strong id="detail-damaged"></strong></span>
+            </div>
             <div class="stat" id="detail-reserved-row" hidden title="Booked for upcoming events">
               <span class="stat-label">Reserved</span>
               <span class="stat-value"><strong id="detail-reserved"></strong></span>
@@ -475,7 +479,7 @@
     <div class="modal cart-modal" role="dialog" aria-modal="true" aria-labelledby="return-modal-title" tabindex="-1">
       <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
       <h2 id="return-modal-title"><svg class="icon" aria-hidden="true"><use href="#i-return"/></svg> Return Items</h2>
-      <p class="subtitle">Tick what is being returned now. Lower the quantity if only part of it is coming back.</p>
+      <p class="subtitle">Tick what is coming back now. If anything is damaged or missing, press “Damaged or missing?” on that line — damaged items are kept aside for repair, and the store team is told.</p>
       <form id="return-form">
         <div id="return-lines"></div>
         <p id="return-person-note" class="person-note" hidden></p>
@@ -483,7 +487,7 @@
           <label>Returned by (name) <input id="return-name" type="text" autocomplete="name" required /></label>
           <label>Employee number <input id="return-employee-no" type="text" required /></label>
         </div>
-        <label>Notes (optional, e.g. condition) <textarea id="return-notes" rows="2"></textarea></label>
+        <label>Notes (optional) <textarea id="return-notes" rows="2"></textarea></label>
         <p id="return-form-error" class="error-text" role="alert" hidden></p>
         <div class="form-actions">
           <button id="return-submit-btn" type="submit" class="ghost-btn sky-btn"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg> Record Return</button>
@@ -661,6 +665,28 @@
       <div id="ev-d-actions" class="detail-actions"></div>
       <h3>History</h3>
       <ul id="ev-d-history" class="event-history"></ul>
+    </div>
+  </div>
+
+  <!-- Unused consumables back from an event -->
+  <div id="unused-modal" class="modal-overlay" hidden>
+    <div class="modal cart-modal" role="dialog" aria-modal="true" aria-labelledby="unused-title" tabindex="-1">
+      <button class="modal-close" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+      <h2 id="unused-title"><svg class="icon" aria-hidden="true"><use href="#i-package"/></svg> Return unused items</h2>
+      <p id="unused-subtitle" class="subtitle"></p>
+      <form id="unused-form">
+        <div id="unused-lines"></div>
+        <p id="unused-person-note" class="person-note" hidden></p>
+        <div class="form-row">
+          <label>Your name <input id="unused-name" type="text" autocomplete="name" required /></label>
+          <label>Employee number <input id="unused-employee-no" type="text" required /></label>
+        </div>
+        <p id="unused-form-error" class="error-text" role="alert" hidden></p>
+        <div class="form-actions">
+          <button id="unused-submit-btn" type="submit" class="primary-btn"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg> Put back into stock</button>
+          <button type="button" class="ghost-btn" data-close>Cancel</button>
+        </div>
+      </form>
     </div>
   </div>
 

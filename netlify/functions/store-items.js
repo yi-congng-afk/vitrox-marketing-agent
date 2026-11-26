@@ -286,9 +286,10 @@ exports.handler = async (event) => {
       updated.archived = body.archived;
       updated.archivedAt = body.archived ? new Date().toISOString() : null;
     }
-    if (updated.quantity < (items[index].quantityOnLoan || 0)) {
+    const tiedUp = (items[index].quantityOnLoan || 0) + (items[index].quantityDamaged || 0);
+    if (updated.quantity < tiedUp) {
       return json(400, {
-        error: `${items[index].quantityOnLoan} of "${items[index].name}" are out on loan, so the total can't be set below ${items[index].quantityOnLoan}`,
+        error: `${items[index].quantityOnLoan || 0} of "${items[index].name}" are out on loan${items[index].quantityDamaged ? ` and ${items[index].quantityDamaged} are held as damaged` : ''}, so the total can't be set below ${tiedUp}`,
       });
     }
     updated.updatedAt = new Date().toISOString();

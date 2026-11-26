@@ -1871,3 +1871,32 @@ select.needs-choice { border-color: var(--warn); background-color: var(--warn-bg
   .ev-line-nodesign { display: none; }
   .view-tab { padding: 0.55rem 0.7rem; }
 }
+
+/* ---------- Returns with condition ---------- */
+
+#return-lines .return-line { flex-wrap: wrap; }
+#return-lines .line-info { flex: 1 1 14rem; min-width: 0; }
+.return-cond-toggle { font-size: 0.8rem; white-space: nowrap; }
+.return-condition {
+  flex-basis: 100%;
+  display: grid;
+  grid-template-columns: 6.5rem 6.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.65rem;
+}
+.return-condition[hidden] { display: none; }
+.return-condition label { margin: 0; font-size: 0.8rem; color: var(--warn); font-weight: 600; }
+.return-condition input { width: 100%; min-width: 0; }
+.stat.stat-damaged { background: var(--danger-bg); }
+.stat.stat-damaged .stat-label, .stat.stat-damaged strong { color: var(--danger); }
+#unused-lines .stepper input { width: 4.5rem; }
+
+@media (max-width: 480px) {
+  #return-lines .return-line { grid-template-areas: "check info" ". qty" ". toggle" "cond cond"; }
+  #return-lines .return-cond-toggle { grid-area: toggle; justify-self: start; }
+  #return-lines .return-condition { grid-area: cond; grid-template-columns: 1fr 1fr; }
+  #return-lines .return-cond-note { grid-column: 1 / -1; }
+}

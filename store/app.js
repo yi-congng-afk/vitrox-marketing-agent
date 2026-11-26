@@ -476,7 +476,7 @@ function showToast(message, type = '', duration) {
 
 // Windows opened from another window (e.g. "Report Issue" from an item) go
 // back to that window when they are closed, instead of dropping to the grid.
-const SUB_MODALS = new Set(['txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal', 'admins-modal', 'labels-modal']);
+const SUB_MODALS = new Set(['unused-modal', 'txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'item-form-modal', 'return-modal', 'admin-modal', 'account-modal', 'admins-modal', 'labels-modal']);
 // Forms where a stray click outside should not throw away what was typed.
 const KEEP_ON_BACKDROP = new Set(['item-form-modal', 'txn-modal', 'edit-txn-modal', 'edit-loan-modal', 'report-modal', 'return-modal', 'categories-modal', 'cleanup-modal', 'admins-modal']);
 const returnTo = {};
@@ -1362,7 +1362,9 @@ el('retry-btn').addEventListener('click', () => {
 // ---------- Dashboard: banner, filters, grid ----------
 
 function availableQty(item) {
-  const available = item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity;
+  // Damaged units returned from loans are held until repaired or written off.
+  const held = item.quantityDamaged || 0;
+  const available = (item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity) - held;
   return Math.max(0, available || 0);
 }
 
@@ -1460,6 +1462,7 @@ function cardHtml(item) {
     `<span class="qty-pill ${low ? 'low' : 'ok'}">${available} ${unit} avail.</span>` +
     (designs ? `<span class="design-tag">${plural(designs, 'design', 'designs')}</span>` : '') +
     (onLoan > 0 ? `<span class="on-loan-tag">${onLoan} on loan</span>` : '') +
+    (item.quantityDamaged ? `<span class="qty-pill low" title="Returned damaged — held until repaired or written off">${item.quantityDamaged} damaged</span>` : '') +
     (inCart > 0 ? `<span class="in-cart-tag">${icon('cart')} ${inCart} in cart</span>` : '');
 
   let cartRow;
@@ -1628,6 +1631,8 @@ function renderDetailStock(item, resetQty) {
 
   el('detail-total').textContent = item.quantity;
   el('detail-reserved-row').hidden = reserved <= 0;
+  el('detail-damaged-row').hidden = !item.quantityDamaged;
+  el('detail-damaged').textContent = item.quantityDamaged || 0;
   el('detail-reserved').textContent = reserved;
   el('detail-qty').textContent = available;
   el('detail-low-stock').hidden = available > item.lowStockThreshold;
@@ -1767,7 +1772,8 @@ function renderHistory() {
       const qty = r.quantity > 0 ? `+${r.quantity}` : String(r.quantity);
       return `<tr>${date}<td><span class="type-label">Correction</span></td><td>${qty} returned</td><td>${who}</td><td>${escapeHtml(remarks)}</td><td class="row-actions"></td></tr>`;
     }
-    return `<tr>${date}<td><span class="type-label ret">Return</span></td><td>${r.quantity}</td><td>${who}</td><td>${escapeHtml(remarks)}</td><td class="row-actions"></td></tr>`;
+    const condition = [r.damaged ? `${r.damaged} damaged` : '', r.missing ? `${r.missing} missing` : '', r.conditionNote || ''].filter(Boolean).join(' · ');
+    return `<tr>${date}<td><span class="type-label ret">Return</span></td><td>${r.quantity}${r.missing ? ` <span class="muted-text">(+${r.missing} missing)</span>` : ''}</td><td>${who}</td><td>${escapeHtml([condition, remarks].filter(Boolean).join(' · '))}</td><td class="row-actions"></td></tr>`;
   });
 
   if (historyTotal > historyEvents.length) {
@@ -2255,7 +2261,7 @@ el('checkout-form').addEventListener('submit', (e) => {
 let returnOrigin = 'detail';
 
 function loanOutstanding(loan) {
-  return loan.quantity - loan.quantityReturned;
+  return loan.quantity - loan.quantityReturned - (loan.quantityMissing || 0);
 }
 
 function isOverdue(loan) {
@@ -2272,20 +2278,28 @@ function openReturnModal(loans, { origin, checkAll }) {
     const checked = checkAll || loans.length === 1;
     const checkId = `return-check-${index}`;
     const due = loan.expectedReturnDate ? ` · due ${fmtDate(loan.expectedReturnDate)}` : '';
+    const name = `${loan.itemName}${loan.variationName ? ` (${loan.variationName})` : ''}`;
 
     const row = document.createElement('div');
     row.className = `return-line${checked ? '' : ' is-off'}`;
+    row.dataset.outstanding = String(outstanding);
     row.innerHTML =
       `<input type="checkbox" id="${checkId}"${checked ? ' checked' : ''} />` +
       `<label class="line-info" for="${checkId}">` +
-      `<strong>${escapeHtml(loan.itemName)} — ${outstanding} not returned</strong>` +
+      `<strong>${escapeHtml(name)} — ${outstanding} not returned</strong>` +
       `<span class="line-meta">${escapeHtml(`Borrowed by ${loan.name} (${loan.employeeNo}) · ${loan.purpose}${due}`)}</span>` +
       `</label>` +
-      `<span class="stepper">` +
+      `<span class="stepper" title="Coming back in good condition">` +
       `<button type="button" class="step-btn" data-step="-1" aria-label="Decrease quantity">${icon('minus')}</button>` +
-      `<input type="number" inputmode="numeric" min="1" max="${outstanding}" step="1" value="${outstanding}" aria-label="Quantity of ${escapeHtml(loan.itemName)} being returned" />` +
+      `<input type="number" inputmode="numeric" min="0" max="${outstanding}" step="1" value="${outstanding}" data-cond="good" aria-label="${escapeHtml(name)} back in good condition" />` +
       `<button type="button" class="step-btn" data-step="1" aria-label="Increase quantity">${icon('plus')}</button>` +
-      `</span>`;
+      `</span>` +
+      `<button type="button" class="link-btn return-cond-toggle" data-cond-toggle aria-expanded="false">Damaged or missing?</button>` +
+      `<div class="return-condition" hidden>` +
+      `<label>Damaged <input type="number" inputmode="numeric" min="0" max="${outstanding}" step="1" value="0" data-cond="damaged" /></label>` +
+      `<label>Missing <input type="number" inputmode="numeric" min="0" max="${outstanding}" step="1" value="0" data-cond="missing" /></label>` +
+      `<label class="return-cond-note">What happened? <input type="text" maxlength="300" data-cond="note" placeholder="e.g. leg cracked, one left at the venue" /></label>` +
+      `</div>`;
     row.querySelector('input[type="checkbox"]').dataset.loanId = loan.id;
     container.appendChild(row);
   });
@@ -2296,9 +2310,37 @@ function openReturnModal(loans, { origin, checkAll }) {
   openModal('return-modal');
 }
 
+function returnRowValues(row) {
+  const num = (cond) => Math.max(0, Math.round(Number(row.querySelector(`[data-cond="${cond}"]`).value)) || 0);
+  return { good: num('good'), damaged: num('damaged'), missing: num('missing'), note: row.querySelector('[data-cond="note"]').value.trim() };
+}
+
 el('return-lines').addEventListener('change', (e) => {
-  if (e.target.type !== 'checkbox') return;
-  e.target.closest('.return-line').classList.toggle('is-off', !e.target.checked);
+  const row = e.target.closest('.return-line');
+  if (!row) return;
+  if (e.target.type === 'checkbox') {
+    row.classList.toggle('is-off', !e.target.checked);
+    return;
+  }
+  // Damaged / missing come out of the "good" count, so the line never adds up to more than is out.
+  const cond = e.target.dataset.cond;
+  if (cond === 'damaged' || cond === 'missing') {
+    const v = returnRowValues(row);
+    const outstanding = Number(row.dataset.outstanding);
+    const good = row.querySelector('[data-cond="good"]');
+    if (v.good + v.damaged + v.missing > outstanding) good.value = String(Math.max(0, outstanding - v.damaged - v.missing));
+    if (v.damaged + v.missing > 0) row.querySelector('input[type="checkbox"]').checked = true;
+    row.classList.toggle('is-off', !row.querySelector('input[type="checkbox"]').checked);
+  }
+});
+
+el('return-lines').addEventListener('click', (e) => {
+  const toggle = e.target.closest('[data-cond-toggle]');
+  if (!toggle) return;
+  const box = toggle.closest('.return-line').querySelector('.return-condition');
+  box.hidden = !box.hidden;
+  toggle.setAttribute('aria-expanded', String(!box.hidden));
+  if (!box.hidden) box.querySelector('[data-cond="damaged"]').focus();
 });
 
 el('detail-return-btn').addEventListener('click', () => {
@@ -2324,23 +2366,27 @@ el('return-form').addEventListener('submit', (e) => {
   e.preventDefault();
 
   const returns = [];
+  let problem = '';
   el('return-lines')
     .querySelectorAll('.return-line')
     .forEach((row) => {
       const check = row.querySelector('input[type="checkbox"]');
       if (!check.checked) return;
-      returns.push({
-        loanId: check.dataset.loanId,
-        quantity: Math.round(Number(row.querySelector('input[type="number"]').value)),
-      });
+      const v = returnRowValues(row);
+      const total = v.good + v.damaged + v.missing;
+      const name = row.querySelector('strong').textContent.split(' — ')[0];
+      if (total <= 0) problem = problem || `“${name}”: enter how many are coming back (or damaged / missing).`;
+      else if (total > Number(row.dataset.outstanding)) problem = problem || `“${name}”: only ${row.dataset.outstanding} are still out.`;
+      else if ((v.damaged || v.missing) && !v.note) problem = problem || `“${name}”: say briefly what happened to the damaged or missing items.`;
+      returns.push({ loanId: check.dataset.loanId, quantity: v.good, damaged: v.damaged, missing: v.missing, note: v.note });
     });
 
   if (returns.length === 0) {
     setFormError('return-form-error', 'Tick at least one item that is being returned.');
     return;
   }
-  if (returns.some((r) => !r.quantity || r.quantity <= 0)) {
-    setFormError('return-form-error', 'Every ticked item needs a return quantity of at least 1.');
+  if (problem) {
+    setFormError('return-form-error', problem);
     return;
   }
 
@@ -2362,7 +2408,14 @@ el('return-form').addEventListener('submit', (e) => {
 
     rememberPerson(body);
     closeModal('return-modal');
-    showToast(`Return recorded for ${plural(returns.length, 'item', 'items')}.`, 'success');
+    const flagged = returns.reduce((sum, r) => sum + r.damaged + r.missing, 0);
+    showToast(
+      flagged
+        ? `Return recorded. ${plural(flagged, 'damaged or missing item has', 'damaged or missing items have')} been reported to the store team.`
+        : `Return recorded for ${plural(returns.length, 'item', 'items')}.`,
+      'success',
+      flagged ? 6000 : undefined
+    );
     await loadItems({ silent: true });
     loadReportsBadge();
     if (returnOrigin === 'loans') await openLoansPanel();
@@ -2421,10 +2474,17 @@ function loanStatusHtml(loan) {
     const returns = loan.returns || [];
     const last = returns[returns.length - 1];
     const detail = last ? ` ${escapeHtml(fmtDay(last.returnedAt))} by ${escapeHtml(last.name)}` : '';
-    return `<span class="qty-pill ok">Returned</span>${detail}`;
+    return `<span class="qty-pill ok">Returned</span>${conditionPills(loan)}${detail}`;
   }
   const overdue = isOverdue(loan) ? ' <span class="qty-pill low">Overdue</span>' : '';
-  return `<span class="on-loan-tag">${loanOutstanding(loan)} not returned</span>${overdue}`;
+  return `<span class="on-loan-tag">${loanOutstanding(loan)} not returned</span>${conditionPills(loan)}${overdue}`;
+}
+
+function conditionPills(loan) {
+  return (
+    (loan.quantityDamaged ? ` <span class="qty-pill low">${loan.quantityDamaged} damaged</span>` : '') +
+    (loan.quantityMissing ? ` <span class="qty-pill low">${loan.quantityMissing} missing</span>` : '')
+  );
 }
 
 function updateReturnSelectedButton() {
@@ -3003,7 +3063,16 @@ function renderEventDetail(id) {
     const item = items.find((i) => i.id === ref.itemId);
     const loanable = item ? item.returnable : itemLoans.length > 0;
     let back = '—';
-    if (b.status === 'collected' && took) back = loanable ? `${returned} of ${took.quantity}` : 'Used';
+    const damaged = itemLoans.reduce((sum, l) => sum + (l.quantityDamaged || 0), 0);
+    const missing = itemLoans.reduce((sum, l) => sum + (l.quantityMissing || 0), 0);
+    const unused = (b.unusedReturned || []).filter((u) => key(u) === k).reduce((sum, u) => sum + u.quantity, 0);
+    if (b.status === 'collected' && took) {
+      back = loanable
+        ? `${returned} of ${took.quantity}${damaged ? ` (${damaged} damaged)` : ''}${missing ? ` · ${missing} missing` : ''}`
+        : unused
+          ? `${took.quantity - unused} used · ${unused} back unused`
+          : 'Used';
+    }
     return (
       `<tr><td><strong>${escapeHtml(ref.itemName)}</strong>${ref.itemCode ? ` <span class="item-code">${escapeHtml(ref.itemCode)}</span>` : ''}</td>` +
       `<td>${escapeHtml(ref.variationName || '—')}</td>` +
@@ -3036,6 +3105,7 @@ function renderEventDetail(id) {
   const live = b.status === 'booked' && b.endDate >= todayStr();
   if (live && (b.lines || []).length) actions.push(`<button type="button" class="primary-btn" data-ev-action="collect">${icon('cart')} Move out (collect)</button>`);
   if (open.length) actions.push(`<button type="button" class="ghost-btn sky-btn" data-ev-action="return">${icon('return')} Return items</button>`);
+  if (unusedRoom(b).length) actions.push(`<button type="button" class="ghost-btn" data-ev-action="unused">${icon('package')} Return unused</button>`);
   if (canEditEvent(b)) actions.push(`<button type="button" class="ghost-btn" data-ev-action="edit">${icon('pencil')} Edit</button>`);
   actions.push(`<button type="button" class="ghost-btn" data-ev-action="duplicate">${icon('plus')} Duplicate</button>`);
   if (canEditEvent(b)) actions.push(`<button type="button" class="ghost-btn danger-text" data-ev-action="cancel">Cancel event</button>`);
@@ -3066,6 +3136,8 @@ el('ev-d-actions').addEventListener('click', async (e) => {
   } else if (action === 'return') {
     const open = eventLoans(b).filter((l) => l.status === 'open');
     openReturnModal(open, { origin: 'event', checkAll: true });
+  } else if (action === 'unused') {
+    openUnusedModal(b);
   } else if (action === 'edit') {
     openEventForm({ booking: b });
   } else if (action === 'duplicate') {
@@ -3075,6 +3147,74 @@ el('ev-d-actions').addEventListener('click', async (e) => {
   } else if (action === 'delete') {
     requireAdminThen(() => deleteBooking(b));
   }
+});
+
+// ---------- Unused consumables back from an event ----------
+
+PERSON_FIELDS.push({ name: 'unused-name', employeeNo: 'unused-employee-no', note: 'unused-person-note' });
+
+// Consumables taken for the event that could still come back: [{ line, room }]
+function unusedRoom(b) {
+  if (b.status !== 'collected') return [];
+  const key = (l) => `${l.itemId}|${l.variationId || ''}`;
+  return (b.collectedLines || [])
+    .filter((l) => {
+      const item = items.find((i) => i.id === l.itemId);
+      return item ? !item.returnable : l.returnable === false;
+    })
+    .map((l) => ({
+      line: l,
+      room: l.quantity - (b.unusedReturned || []).filter((u) => key(u) === key(l)).reduce((sum, u) => sum + u.quantity, 0),
+    }))
+    .filter((x) => x.room > 0);
+}
+
+let unusedFor = null;
+
+function openUnusedModal(b) {
+  unusedFor = b.id;
+  el('unused-subtitle').textContent = `Leftovers from “${b.event}” go back into stock. Enter how many of each came back unused.`;
+  el('unused-lines').innerHTML = unusedRoom(b)
+    .map(
+      ({ line, room }, i) =>
+        `<div class="return-line"><span class="line-info"><strong>${escapeHtml(line.itemName)}${line.variationName ? ` (${escapeHtml(line.variationName)})` : ''}</strong>` +
+        `<span class="line-meta">${line.quantity} taken · up to ${room} can come back</span></span>` +
+        `<span class="stepper">` +
+        `<button type="button" class="step-btn" data-step="-1" aria-label="Decrease quantity">${icon('minus')}</button>` +
+        `<input type="number" inputmode="numeric" min="0" max="${room}" step="1" value="0" data-unused="${i}" data-item-id="${escapeHtml(line.itemId)}" data-variation-id="${escapeHtml(line.variationId || '')}" aria-label="${escapeHtml(line.itemName)} back unused" />` +
+        `<button type="button" class="step-btn" data-step="1" aria-label="Increase quantity">${icon('plus')}</button>` +
+        `</span></div>`
+    )
+    .join('');
+  prefillPerson('unused-name', 'unused-employee-no');
+  setFormError('unused-form-error', '');
+  openModal('unused-modal');
+}
+
+el('unused-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const lines = [...el('unused-lines').querySelectorAll('[data-unused]')]
+    .map((input) => ({ itemId: input.dataset.itemId, variationId: input.dataset.variationId || undefined, quantity: Math.max(0, Math.round(Number(input.value)) || 0) }))
+    .filter((l) => l.quantity > 0);
+  if (!lines.length) {
+    setFormError('unused-form-error', 'Enter how many came back unused.');
+    return;
+  }
+  withBusy(el('unused-submit-btn'), async () => {
+    setFormError('unused-form-error', '');
+    const body = { bookingId: unusedFor, lines, ...personFrom('unused-name', 'unused-employee-no') };
+    const res = await request(`${API.checkout}?action=unused`, { method: 'POST', body });
+    if (!res.ok) {
+      setFormError('unused-form-error', res.error);
+      return;
+    }
+    rememberPerson(body);
+    closeModal('unused-modal');
+    showToast(`${plural(lines.reduce((s, l) => s + l.quantity, 0), 'item', 'items')} put back into stock.`, 'success');
+    await loadItems({ silent: true });
+    await loadEventData();
+    refreshEventViews();
+  });
 });
 
 // ---------- Event form: create, edit, duplicate ----------
@@ -3901,15 +4041,30 @@ async function openReportsPanel() {
   }
   list.innerHTML = shown
     .map((r) => {
-      const kind = r.type === 'damage' ? `${icon('flag')} Damaged` : `${icon('package')} Restock request`;
+      const kind = r.type === 'damage' ? `${icon('flag')} Damaged` : r.type === 'missing' ? `${icon('alert')} Missing` : `${icon('package')} Restock request`;
+      const OUTCOME = { repaired: 'Repaired', written_off: 'Written off', found: 'Found' };
       const qty = r.quantity ? ` · quantity affected: ${escapeHtml(r.quantity)}` : '';
       const resolved = r.status === 'resolved';
-      const state = resolved ? ` <span class="qty-pill ok">Resolved${r.resolvedAt ? ' ' + escapeHtml(fmtDay(r.resolvedAt)) : ''}</span>` : '';
+      const state = resolved
+        ? ` <span class="qty-pill ok">${r.outcome ? OUTCOME[r.outcome] : 'Resolved'}${r.resolvedAt ? ' ' + escapeHtml(fmtDay(r.resolvedAt)) : ''}</span>`
+        : r.held
+          ? ' <span class="qty-pill low">Held out of use</span>'
+          : '';
+      const stockMoved = resolved && r.outcome && (r.held || r.type === 'missing');
+      const resolveButtons = r.held
+        ? `<button type="button" class="ghost-btn" data-resolve="${escapeHtml(r.id)}" data-outcome="repaired">${icon('check')} Repaired</button>` +
+          `<button type="button" class="ghost-btn danger-text" data-resolve="${escapeHtml(r.id)}" data-outcome="written_off">Write off</button>`
+        : r.type === 'missing'
+          ? `<button type="button" class="ghost-btn" data-resolve="${escapeHtml(r.id)}" data-outcome="found">${icon('check')} Found</button>` +
+            `<button type="button" class="ghost-btn danger-text" data-resolve="${escapeHtml(r.id)}" data-outcome="written_off">Written off</button>`
+          : `<button type="button" class="ghost-btn" data-resolve="${escapeHtml(r.id)}">${icon('check')} Resolve</button>`;
       const actions = admin
         ? `<div class="row-actions">` +
           (resolved
-            ? `<button type="button" class="ghost-btn" data-reopen="${escapeHtml(r.id)}">${icon('refresh')} Reopen</button>`
-            : `<button type="button" class="ghost-btn" data-resolve="${escapeHtml(r.id)}">${icon('check')} Resolve</button>`) +
+            ? stockMoved
+              ? ''
+              : `<button type="button" class="ghost-btn" data-reopen="${escapeHtml(r.id)}">${icon('refresh')} Reopen</button>`
+            : resolveButtons) +
           `<button type="button" class="icon-btn danger-text" data-report-delete="${escapeHtml(r.id)}" aria-label="Delete this report" title="Delete this report">${icon('trash')}</button>` +
           `</div>`
         : '';
@@ -3937,26 +4092,39 @@ el('reports-list').addEventListener('click', (e) => {
   const resolveBtn = e.target.closest('[data-resolve]');
   const reopenBtn = e.target.closest('[data-reopen]');
   const deleteBtn = e.target.closest('[data-report-delete]');
-  if (resolveBtn) withBusy(resolveBtn, () => setReportStatus(resolveBtn.dataset.resolve, 'resolved'));
+  if (resolveBtn) withBusy(resolveBtn, () => setReportStatus(resolveBtn.dataset.resolve, 'resolved', resolveBtn.dataset.outcome));
   else if (reopenBtn) withBusy(reopenBtn, () => setReportStatus(reopenBtn.dataset.reopen, 'open'));
   else if (deleteBtn) requireAdminThen(() => deleteReport(deleteBtn.dataset.reportDelete));
 });
 
-function setReportStatus(id, status) {
+function setReportStatus(id, status, outcome) {
   return new Promise((done) => {
     if (!isAdminUnlocked()) done();
     requireAdminThen(async () => {
+      if (outcome === 'written_off') {
+        const ok = await confirmDialog({
+          title: 'Write these items off?',
+          message: 'They come off the item’s total for good (the history is kept).',
+          confirmLabel: 'Write off',
+        });
+        if (!ok) {
+          done();
+          return;
+        }
+      }
       const res = await request(`${API.reports}?id=${encodeURIComponent(id)}`, {
         method: 'PATCH',
         admin: true,
-        body: { status },
+        body: outcome ? { status, outcome } : { status },
       });
+      const said = { repaired: 'Marked repaired — back in use.', written_off: 'Written off.', found: 'Marked found — back in stock.' };
       if (!res.ok) showToast(res.error, 'error');
-      else showToast(status === 'resolved' ? 'Report resolved.' : 'Report reopened.', 'success');
+      else showToast(status === 'resolved' ? said[outcome] || 'Report resolved.' : 'Report reopened.', 'success');
       done();
       if (res.ok) {
         loadReportsBadge();
         openReportsPanel();
+        if (outcome) loadItems({ silent: true });
       }
     });
   });

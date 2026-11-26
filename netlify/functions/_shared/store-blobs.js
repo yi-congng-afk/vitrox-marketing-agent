@@ -326,6 +326,9 @@ function updateTransactions(mutate) {
 function updateLoans(mutate) {
   return updateJSON(loansStore(), 'loans', () => [], mutate);
 }
+function updateReports(mutate) {
+  return updateJSON(reportsStore(), 'reports', () => [], (list) => mutate(Array.isArray(list) ? list : []));
+}
 function updateBookings(mutate) {
   return updateJSON(bookingsStore(), 'bookings', () => [], (list) => mutate(Array.isArray(list) ? list : []));
 }
@@ -341,6 +344,13 @@ async function getBookings() {
 
 async function saveBookings(bookings) {
   await bookingsStore().setJSON('bookings', bookings);
+}
+
+// Units that can go out right now: loanable items minus those out on loan,
+// minus units returned damaged and held until repaired or written off.
+function freeNow(item) {
+  const held = item.quantityDamaged || 0;
+  return Math.max(0, (item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity) - held);
 }
 
 function genId(prefix) {
@@ -364,6 +374,8 @@ module.exports = {
   updateTransactions,
   updateLoans,
   updateBookings,
+  updateReports,
+  freeNow,
   genId,
   getConfig,
   saveConfig,

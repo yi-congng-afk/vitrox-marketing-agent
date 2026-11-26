@@ -28,7 +28,7 @@ function plural(n, one, many) {
 }
 
 function loanLine(loan, today) {
-  const outstanding = loan.quantity - loan.quantityReturned;
+  const outstanding = loan.quantity - loan.quantityReturned - (loan.quantityMissing || 0);
   const late = daysBetween(loan.expectedReturnDate, today);
   return (
     `- ${loan.itemName} × ${outstanding} — for ${loan.purpose || 'no purpose given'}, ` +
@@ -38,7 +38,7 @@ function loanLine(loan, today) {
 
 function personEmail(loans, today) {
   const first = loans[0];
-  const count = loans.reduce((sum, l) => sum + (l.quantity - l.quantityReturned), 0);
+  const count = loans.reduce((sum, l) => sum + (l.quantity - l.quantityReturned - (l.quantityMissing || 0)), 0);
   return {
     subject: `[ViTrox Store] Reminder: please return ${plural(count, 'item', 'items')} to the store room`,
     text:
@@ -76,7 +76,7 @@ async function runReminders({ now = new Date(), trigger = 'schedule' } = {}) {
   const byLoan = { ...(log.byLoan || {}) };
 
   const overdue = loans.filter(
-    (l) => l.status === 'open' && l.expectedReturnDate && l.expectedReturnDate < today && l.quantity - l.quantityReturned > 0
+    (l) => l.status === 'open' && l.expectedReturnDate && l.expectedReturnDate < today && l.quantity - l.quantityReturned - (l.quantityMissing || 0) > 0
   );
   const due = overdue.filter((l) => !byLoan[l.id] || daysBetween(byLoan[l.id], today) >= REMIND_EVERY_DAYS);
 

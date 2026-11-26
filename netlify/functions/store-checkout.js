@@ -9,6 +9,7 @@ const {
   updateTransactions,
   updateLoans,
   updateBookings,
+  freeNow,
   genId,
 } = require('./_shared/store-blobs');
 const { sendAlertEmail } = require('./_shared/mailer');
@@ -43,7 +44,7 @@ async function deleteMoveOut(id, event) {
   }
   for (const l of groupLoans) {
     const item = items.find((i) => i.id === l.itemId);
-    const outstanding = Math.max(0, l.quantity - l.quantityReturned);
+    const outstanding = Math.max(0, l.quantity - l.quantityReturned - (l.quantityMissing || 0));
     if (item && outstanding) {
       item.quantityOnLoan = Math.max(0, (item.quantityOnLoan || 0) - outstanding);
       item.updatedAt = now;
@@ -65,6 +66,99 @@ async function deleteMoveOut(id, event) {
   return json(200, { deleted: { transactions: txns.length, loans: groupLoans.length } });
 }
 
+// Consumables taken for an event but not used (e.g. leftover goodies bags) go
+// back into stock: POST ?action=unused { bookingId, lines: [{ itemId, variationId?, quantity }] }.
+// Never more than was taken for that event, minus what already came back.
+async function returnUnused(event, access) {
+  let body;
+  try {
+    body = JSON.parse(event.body || '{}') || {};
+  } catch {
+    return json(400, { error: 'Invalid request body' });
+  }
+  const who = recordedBy(access.user, body);
+  if (!who.name) return json(400, { error: 'Employee name is required' });
+  if (!who.employeeNo) return json(400, { error: 'Employee number is required' });
+  if (!body.bookingId) return json(400, { error: 'Missing bookingId' });
+  if (!Array.isArray(body.lines) || !body.lines.length) return json(400, { error: 'Enter how many came back unused' });
+  const key = (l) => `${l.itemId}|${l.variationId || ''}`;
+  const wanted = new Map();
+  for (const line of body.lines) {
+    const qty = Math.round(Number(line && line.quantity));
+    if (!line || !line.itemId || !Number.isFinite(qty) || qty < 0) return json(400, { error: 'Quantities must be 0 or more' });
+    if (qty > 0) wanted.set(key(line), { itemId: line.itemId, variationId: line.variationId || null, quantity: (wanted.get(key(line)) || { quantity: 0 }).quantity + qty });
+  }
+  if (!wanted.size) return json(400, { error: 'Enter how many came back unused' });
+
+  const now = new Date().toISOString();
+  // Only consumables come back this way; loanable items are returned as loans.
+  const loanable = new Set((await getItems()).filter((i) => i.returnable).map((i) => i.id));
+  let marked;
+  try {
+    marked = await updateBookings((bookings) => {
+      const b = bookings.find((x) => x.id === body.bookingId);
+      if (!b) return { response: json(404, { error: 'That event no longer exists' }) };
+      if (b.status !== 'collected') return { response: json(400, { error: 'Only items from a collected event can come back unused' }) };
+      const taken = (b.collectedLines || []).filter((l) => !l.returnable && !loanable.has(l.itemId));
+      const already = b.unusedReturned || [];
+      const problems = [];
+      const lines = [];
+      for (const w of wanted.values()) {
+        const t = taken.find((l) => key(l) === key(w));
+        const back = already.filter((l) => key(l) === key(w)).reduce((s, l) => s + l.quantity, 0);
+        const room = t ? t.quantity - back : 0;
+        if (!t) problems.push('An item in the list was not taken for this event');
+        else if (w.quantity > room) problems.push(`"${t.itemName}": only ${room} more can come back (${t.quantity} taken, ${back} already returned)`);
+        else lines.push({ ...w, itemName: t.itemName, variationName: t.variationName || null });
+      }
+      if (problems.length) return { response: json(400, { error: problems.join('; ') }) };
+      const next = {
+        ...b,
+        unusedReturned: already.concat(lines.map((l) => ({ ...l, at: now, by: who.name }))),
+        history: (b.history || []).concat([
+          { at: now, action: 'unused returned', by: who.name, email: who.email || '', detail: lines.map((l) => `${l.itemName}${l.variationName ? ` (${l.variationName})` : ''} × ${l.quantity}`).join(', ') },
+        ]),
+      };
+      return { save: bookings.map((x) => (x.id === b.id ? next : x)), booking: next, lines };
+    });
+    if (marked.response) return marked.response;
+
+    const txns = [];
+    await updateItems((items) => {
+      txns.length = 0;
+      for (const l of marked.lines) {
+        const item = items.find((i) => i.id === l.itemId);
+        if (!item) continue;
+        const before = item.quantity;
+        item.quantity += l.quantity;
+        item.updatedAt = now;
+        txns.push({
+          id: genId('txn'),
+          itemId: item.id,
+          itemName: item.name,
+          ...(l.variationId ? { variationId: l.variationId, variationName: l.variationName } : {}),
+          type: 'add',
+          quantity: l.quantity,
+          quantityBefore: before,
+          quantityAfter: item.quantity,
+          ...who,
+          remarks: `Unused, returned from "${marked.booking.event}"`,
+          bookingId: marked.booking.id,
+          unusedReturn: true,
+          timestamp: now,
+        });
+      }
+      return { save: items };
+    });
+    await updateTransactions((list) => ({ save: list.concat(txns) }));
+  } catch (err) {
+    if (err && err.code === 'busy') return json(503, { error: err.message, code: 'busy' });
+    throw err;
+  }
+  return json(200, { booking: marked.booking });
+}
+
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'DELETE') {
     const access = await checkAccess(event);
@@ -79,6 +173,8 @@ exports.handler = async (event) => {
 
   const access = await checkAccess(event);
   if (access.response) return access.response;
+
+  if ((event.queryStringParameters || {}).action === 'unused') return returnUnused(event, access);
 
   let body;
   try {
@@ -153,8 +249,10 @@ exports.handler = async (event) => {
       resolved.forEach(({ item, want }) => totals.set(item.id, (totals.get(item.id) || 0) + want.quantity));
       for (const [itemId, qty] of totals) {
         const item = items.find((i) => i.id === itemId);
-        const available = item.returnable ? item.quantity - (item.quantityOnLoan || 0) : item.quantity;
-        if (qty > available) problems.push(`"${item.name}": you asked for ${qty} but only ${available} available`);
+        const available = freeNow(item);
+        if (qty > available) {
+          problems.push(`"${item.name}": you asked for ${qty} but only ${available} available${item.quantityDamaged ? ` (${item.quantityDamaged} held as damaged)` : ''}`);
+        }
       }
       if (hasLoanable && !expectedReturnDate) problems.push('An expected return date is required because your cart has loanable items');
       if (problems.length) return { response: json(400, { error: problems.join('; ') }) };
@@ -241,7 +339,7 @@ exports.handler = async (event) => {
           collectedAt: now,
           checkoutId,
           collectedBy: who.email || who.name,
-          collectedLines: lines.map((l) => ({ itemId: l.item.id, itemName: l.item.name, ...designFields(l.variation), quantity: l.quantity })),
+          collectedLines: lines.map((l) => ({ itemId: l.item.id, itemName: l.item.name, ...designFields(l.variation), quantity: l.quantity, returnable: Boolean(l.item.returnable) })),
           history: (found.history || []).concat([{ at: now, action: 'collected', by: who.name, email: who.email || '', detail: collected }]),
         };
         return { save: bookings.map((b) => (b.id === found.id ? next : b)), booking: next };

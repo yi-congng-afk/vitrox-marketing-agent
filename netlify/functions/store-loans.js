@@ -1,5 +1,6 @@
 const { requireManager } = require('./_shared/store-auth');
-const { getItems, saveItems, getLoans, saveLoans, getReminderLog, genId } = require('./_shared/store-blobs');
+const { getItems, saveItems, getLoans, saveLoans, getReminderLog, genId, updateLoans, updateItems, updateReports, freeNow } = require('./_shared/store-blobs');
+const { sendAlertEmail } = require('./_shared/mailer');
 const { checkAccess, recordedBy } = require('./_shared/store-access');
 const { runReminders, REMIND_EVERY_DAYS } = require('./_shared/reminders');
 const { emailConfigured } = require('./_shared/mailer');
@@ -88,7 +89,7 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: `"${item.name}" is not marked as returnable/loanable equipment` }) };
     }
 
-    const available = item.quantity - (item.quantityOnLoan || 0);
+    const available = freeNow(item);
     if (qty > available) {
       return { statusCode: 400, body: JSON.stringify({ error: `Cannot loan out ${qty} — only ${available} available` }) };
     }
@@ -130,10 +131,13 @@ exports.handler = async (event) => {
 
     // Either one loan (?id=...&quantity) or several at once (body.returns), so a
     // person bringing back everything from an event enters their details once.
+    // Each line: quantity = back in good condition, damaged = back but damaged
+    // (held out of use until repaired or written off), missing = not coming back
+    // (taken off the item's total).
     const { notes } = body;
     const who = recordedBy(access.user, body);
     const { name, employeeNo } = who;
-    const rawLines = id ? [{ loanId: id, quantity: body.quantity }] : body.returns;
+    const rawLines = id ? [{ loanId: id, quantity: body.quantity, damaged: body.damaged, missing: body.missing }] : body.returns;
     if (!Array.isArray(rawLines) || rawLines.length === 0) {
       return { statusCode: 400, body: JSON.stringify({ error: 'Select at least one loan to return' }) };
     }
@@ -142,58 +146,110 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: 'Employee number is required' }) };
     }
 
+    const count = (v) => (v === undefined || v === null || v === '' ? 0 : Math.round(Number(v)));
     const wanted = new Map();
     for (const line of rawLines) {
-      const qty = Math.round(Number(line && line.quantity));
-      if (!line || !line.loanId || !qty || qty <= 0) {
+      const good = count(line && line.quantity);
+      const damaged = count(line && line.damaged);
+      const missing = count(line && line.missing);
+      if (!line || !line.loanId || [good, damaged, missing].some((n) => !Number.isFinite(n) || n < 0) || good + damaged + missing <= 0) {
         return { statusCode: 400, body: JSON.stringify({ error: 'quantity must be a positive number' }) };
       }
-      wanted.set(line.loanId, (wanted.get(line.loanId) || 0) + qty);
+      const prev = wanted.get(line.loanId) || { good: 0, damaged: 0, missing: 0, note: '' };
+      wanted.set(line.loanId, {
+        good: prev.good + good,
+        damaged: prev.damaged + damaged,
+        missing: prev.missing + missing,
+        note: String((line && line.note) || prev.note || '').trim().slice(0, 300),
+      });
     }
-
-    const [loans, items] = await Promise.all([getLoans(), getItems()]);
-    const problems = [];
-    for (const [loanId, qty] of wanted) {
-      const loan = loans.find((l) => l.id === loanId);
-      if (!loan) {
-        problems.push('A selected loan record no longer exists');
-        continue;
-      }
-      const outstanding = loan.quantity - loan.quantityReturned;
-      if (qty > outstanding) {
-        problems.push(`"${loan.itemName}": only ${outstanding} still outstanding on this loan`);
-      }
-    }
-    if (problems.length > 0) return { statusCode: 400, body: JSON.stringify({ error: problems.join('; ') }) };
 
     const returnedAt = new Date().toISOString();
-    const updatedLoans = [];
+    let result;
+    try {
+      // Loans first (safe saving): the check against what is still out happens
+      // on the latest copy, so the same items can never be returned twice.
+      result = await updateLoans((loans) => {
+        const problems = [];
+        for (const [loanId, w] of wanted) {
+          const loan = loans.find((l) => l.id === loanId);
+          if (!loan) {
+            problems.push('A selected loan record no longer exists');
+            continue;
+          }
+          const outstanding = loan.quantity - loan.quantityReturned - (loan.quantityMissing || 0);
+          const total = w.good + w.damaged + w.missing;
+          if (total > outstanding) problems.push(`"${loan.itemName}": only ${outstanding} still outstanding on this loan`);
+        }
+        if (problems.length) return { response: { statusCode: 400, body: JSON.stringify({ error: problems.join('; ') }) } };
 
-    for (const [loanId, qty] of wanted) {
-      const loan = loans.find((l) => l.id === loanId);
-      if (!Array.isArray(loan.returns)) loan.returns = [];
-      loan.returns.push({
-        quantity: qty,
-        ...who,
-        notes: notes ? String(notes).trim() : '',
-        returnedAt,
+        const updated = [];
+        const changes = [];
+        for (const [loanId, w] of wanted) {
+          const loan = loans.find((l) => l.id === loanId);
+          if (!Array.isArray(loan.returns)) loan.returns = [];
+          const back = w.good + w.damaged;
+          const entry = { quantity: back, ...who, notes: notes ? String(notes).trim() : '', returnedAt };
+          if (w.damaged) entry.damaged = w.damaged;
+          if (w.missing) entry.missing = w.missing;
+          if (w.note) entry.conditionNote = w.note;
+          loan.returns.push(entry);
+          loan.quantityReturned += back;
+          if (w.damaged) loan.quantityDamaged = (loan.quantityDamaged || 0) + w.damaged;
+          if (w.missing) loan.quantityMissing = (loan.quantityMissing || 0) + w.missing;
+          if (loan.quantityReturned + (loan.quantityMissing || 0) >= loan.quantity) {
+            loan.status = 'returned';
+            loan.closedAt = returnedAt;
+          }
+          updated.push(loan);
+          changes.push({ loan, ...w });
+        }
+        return { save: loans, updated, changes };
       });
-      loan.quantityReturned += qty;
-      if (loan.quantityReturned >= loan.quantity) {
-        loan.status = 'returned';
-      }
-      updatedLoans.push(loan);
+      if (result.response) return result.response;
 
-      const item = items.find((i) => i.id === loan.itemId);
-      if (item) {
-        item.quantityOnLoan = Math.max(0, (item.quantityOnLoan || 0) - qty);
-        item.updatedAt = returnedAt;
-      }
+      // Then the stock: everything back stops counting as on loan; damaged
+      // units are held out of use; missing ones come off the total.
+      await updateItems((items) => {
+        for (const c of result.changes) {
+          const item = items.find((i) => i.id === c.loan.itemId);
+          if (!item) continue;
+          item.quantityOnLoan = Math.max(0, (item.quantityOnLoan || 0) - (c.good + c.damaged + c.missing));
+          if (c.damaged) item.quantityDamaged = (item.quantityDamaged || 0) + c.damaged;
+          if (c.missing) item.quantity = Math.max(0, item.quantity - c.missing);
+          item.updatedAt = returnedAt;
+        }
+        return { save: items };
+      });
+    } catch (err) {
+      if (err && err.code === 'busy') return { statusCode: 503, body: JSON.stringify({ error: err.message, code: 'busy' }) };
+      throw err;
     }
 
-    await Promise.all([saveLoans(loans), saveItems(items)]);
+    // Damaged or missing items go straight to the Alerts list (and the admin's inbox).
+    const problems = result.changes.filter((c) => c.damaged || c.missing);
+    if (problems.length) {
+      const newReports = [];
+      for (const c of problems) {
+        const base = { itemId: c.loan.itemId, itemName: c.loan.itemName, ...who, status: 'open', createdAt: returnedAt, resolvedAt: null, loanId: c.loan.id };
+        if (c.loan.variationName) base.variationName = c.loan.variationName;
+        if (c.loan.bookingId) base.bookingId = c.loan.bookingId;
+        const where = `returned from "${c.loan.purpose}"${c.loan.variationName ? ` (${c.loan.variationName})` : ''}`;
+        if (c.damaged) {
+          newReports.push({ ...base, id: genId('rpt'), type: 'damage', quantity: c.damaged, held: true, message: `${c.damaged} ${where} damaged${c.note ? `: ${c.note}` : ''}` });
+        }
+        if (c.missing) {
+          newReports.push({ ...base, id: genId('rpt'), type: 'missing', quantity: c.missing, writtenOff: true, message: `${c.missing} not returned from "${c.loan.purpose}" — missing${c.note ? `: ${c.note}` : ''}` });
+        }
+      }
+      await updateReports((reports) => ({ save: reports.concat(newReports) }));
+      await sendAlertEmail(
+        `[ViTrox Store] Returned with problems: ${[...new Set(problems.map((c) => c.loan.itemName))].join(', ')}`,
+        newReports.map((r) => `- ${r.itemName}: ${r.message}`).join('\n') + `\n\nRecorded by ${name} (${employeeNo})\nWhen: ${returnedAt}`
+      );
+    }
 
-    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loans: updatedLoans }) };
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loans: result.updated }) };
   }
 
   // Admin correction of a loan record: who, what for, when due, how many out
@@ -233,7 +289,9 @@ exports.handler = async (event) => {
     if (returned > quantity) return json(400, { error: `Returned (${returned}) can not be more than the quantity borrowed (${quantity})` });
 
     const item = items.find((i) => i.id === loan.itemId);
-    const extraOut = quantity - returned - (loan.quantity - loan.quantityReturned);
+    const missing = loan.quantityMissing || 0;
+    if (returned + missing > quantity) return json(400, { error: `Returned (${returned}) plus missing (${missing}) can not be more than the quantity borrowed (${quantity})` });
+    const extraOut = quantity - returned - missing - (loan.quantity - loan.quantityReturned - missing);
     if (item && extraOut > 0) {
       const available = item.quantity - (item.quantityOnLoan || 0);
       if (extraOut > available) {
@@ -255,7 +313,7 @@ exports.handler = async (event) => {
       expectedReturnDate: due || null,
       quantity,
       quantityReturned: returned,
-      status: returned >= quantity ? 'returned' : 'open',
+      status: returned + missing >= quantity ? 'returned' : 'open',
       editedAt: now,
     });
     if (email) loan.email = email;
@@ -285,7 +343,7 @@ exports.handler = async (event) => {
     // Deleting a record (a mistake, a test, or old history): whatever was still
     // out on it stops counting as on loan. Stock totals are not touched.
     const loan = loans[index];
-    const outstanding = Math.max(0, loan.quantity - loan.quantityReturned);
+    const outstanding = Math.max(0, loan.quantity - loan.quantityReturned - (loan.quantityMissing || 0));
     const items = await getItems();
     const item = items.find((i) => i.id === loan.itemId);
     if (item && outstanding > 0) {

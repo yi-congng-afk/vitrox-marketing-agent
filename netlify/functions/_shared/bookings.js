@@ -53,7 +53,7 @@ function availabilityFor(item, { start, end, excludeId, bookings, loans, today }
       const due = loan.expectedReturnDate || '';
       // Expected back before the event starts (and not overdue): counts as back.
       if (due && due >= today && due < start) continue;
-      out += Math.max(0, loan.quantity - loan.quantityReturned);
+      out += Math.max(0, loan.quantity - loan.quantityReturned - (loan.quantityMissing || 0));
     }
   }
   const booked = competing.reduce((sum, b) => sum + quantityOf(b, item.id), 0);
@@ -61,7 +61,8 @@ function availabilityFor(item, { start, end, excludeId, bookings, loans, today }
     total: item.quantity,
     out,
     booked,
-    available: item.quantity - out - booked,
+    damaged: item.quantityDamaged || 0,
+    available: item.quantity - out - booked - (item.quantityDamaged || 0),
     conflicts: competing.map((b) => ({
       id: b.id,
       event: b.event,
