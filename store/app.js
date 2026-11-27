@@ -5560,8 +5560,8 @@ el('labels-form').addEventListener('submit', (e) => {
 
 // Sheet layouts in millimetres, matching the print styles.
 const LABEL_PDF_LAYOUT = {
-  std: { top: 15.15, left: 7.2, cols: 3, w: 63.5, h: 38.1, colGap: 2.5, padV: 2.5, padH: 3, gap: 2.5, qr: 30, title: 10, titleLines: 3, sub: 7, brand: 7.5 },
-  lg: { top: 13.1, left: 4.65, cols: 2, w: 99.1, h: 67.7, colGap: 2.5, padV: 4, padH: 5, gap: 4, qr: 52, title: 15, titleLines: 4, sub: 10, brand: 10.5 },
+  std: { top: 15.15, left: 7.2, cols: 3, w: 63.5, h: 38.1, colGap: 2.5, padV: 2.5, padH: 3, gap: 2.5, qr: 24, title: 13, titleLines: 3, sub: 7, brand: 7.5 },
+  lg: { top: 13.1, left: 4.65, cols: 2, w: 99.1, h: 67.7, colGap: 2.5, padV: 4, padH: 5, gap: 4, qr: 42, title: 20, titleLines: 3, sub: 10, brand: 10.5 },
 };
 const PDF_DPI = 300;
 const MM_PX = PDF_DPI / 25.4;
