@@ -1629,10 +1629,10 @@ button.low-stock-row:hover { background: var(--accent-soft); }
   overflow: hidden;
 }
 .qr-sub { font-size: 7pt; line-height: 1.2; overflow-wrap: anywhere; }
-.qr-brand { font-size: 5.5pt; color: #444; margin-top: 0.5mm; }
+.qr-brand { font-size: 7.5pt; font-weight: 700; line-height: 1.2; color: #222; margin-top: 0.5mm; }
 .size-lg .qr-text strong { font-size: 15pt; -webkit-line-clamp: 4; }
 .size-lg .qr-sub { font-size: 10pt; }
-.size-lg .qr-brand { font-size: 7.5pt; }
+.size-lg .qr-brand { font-size: 10.5pt; }
 
 /* Printed sheets: A4, laid out like common sticker sheets (L7160 / L7165). */
 #print-area { display: none; }

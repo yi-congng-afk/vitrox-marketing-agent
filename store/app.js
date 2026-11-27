@@ -5382,7 +5382,6 @@ function labelChoices(kind) {
       subs: [
         [item.code, item.category].filter(Boolean).join(' · '),
         activeVariations(item).length ? `${plural(activeVariations(item).length, 'design', 'designs')}` : '',
-        item.locationText ? `Location: ${item.locationText}` : '',
       ].filter(Boolean),
       url: itemLabelUrl(item),
       search: `${item.name} ${item.code || ''} ${item.category} ${item.locationText || ''}`,
@@ -5402,7 +5401,7 @@ function labelHtml(choice) {
     `<div class="qr-code">${qrSvg(choice.url)}</div>` +
     `<div class="qr-text"><strong>${escapeHtml(choice.title)}</strong>` +
     choice.subs.map((s) => `<span class="qr-sub">${escapeHtml(s)}</span>`).join('') +
-    `<span class="qr-brand">VCLG Store Room · scan to open</span></div>` +
+    `<span class="qr-brand">VCLG Store Room<br />Scan to open</span></div>` +
     `</div>`
   );
 }
@@ -5561,8 +5560,8 @@ el('labels-form').addEventListener('submit', (e) => {
 
 // Sheet layouts in millimetres, matching the print styles.
 const LABEL_PDF_LAYOUT = {
-  std: { top: 15.15, left: 7.2, cols: 3, w: 63.5, h: 38.1, colGap: 2.5, padV: 2.5, padH: 3, gap: 2.5, qr: 30, title: 10, titleLines: 3, sub: 7, brand: 5.5 },
-  lg: { top: 13.1, left: 4.65, cols: 2, w: 99.1, h: 67.7, colGap: 2.5, padV: 4, padH: 5, gap: 4, qr: 52, title: 15, titleLines: 4, sub: 10, brand: 7.5 },
+  std: { top: 15.15, left: 7.2, cols: 3, w: 63.5, h: 38.1, colGap: 2.5, padV: 2.5, padH: 3, gap: 2.5, qr: 30, title: 10, titleLines: 3, sub: 7, brand: 7.5 },
+  lg: { top: 13.1, left: 4.65, cols: 2, w: 99.1, h: 67.7, colGap: 2.5, padV: 4, padH: 5, gap: 4, qr: 52, title: 15, titleLines: 4, sub: 10, brand: 10.5 },
 };
 const PDF_DPI = 300;
 const MM_PX = PDF_DPI / 25.4;
@@ -5634,8 +5633,14 @@ function drawLabelOnCanvas(ctx, choice, L, x, y) {
   blocks.push({ font: ctx.font, color: '#000', size: L.title * PT_PX, lh: 1.15, lines: wrapCanvasText(ctx, choice.title, textW, L.titleLines) });
   ctx.font = `${L.sub * PT_PX}px ${font}`;
   choice.subs.forEach((s) => blocks.push({ font: ctx.font, color: '#000', size: L.sub * PT_PX, lh: 1.2, lines: wrapCanvasText(ctx, s, textW, 2) }));
-  ctx.font = `${L.brand * PT_PX}px ${font}`;
-  blocks.push({ font: ctx.font, color: '#444', size: L.brand * PT_PX, lh: 1.2, lines: wrapCanvasText(ctx, 'VCLG Store Room · scan to open', textW, 2) });
+  ctx.font = `bold ${L.brand * PT_PX}px ${font}`;
+  blocks.push({
+    font: ctx.font,
+    color: '#222',
+    size: L.brand * PT_PX,
+    lh: 1.2,
+    lines: [...wrapCanvasText(ctx, 'VCLG Store Room', textW, 2), ...wrapCanvasText(ctx, 'Scan to open', textW, 1)],
+  });
 
   const blockGap = px(1);
   const heights = blocks.map((b) => b.lines.length * b.size * b.lh);
