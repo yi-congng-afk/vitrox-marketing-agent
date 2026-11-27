@@ -5445,6 +5445,7 @@ async function renderLabelSummary() {
     ? `${plural(total, 'label', 'labels')} on ${plural(sheets, 'A4 sheet', 'A4 sheets')}.`
     : 'Tick at least one to print.';
   el('labels-print-btn').disabled = total === 0 || total > MAX_LABELS;
+  el('labels-pdf-btn').disabled = total === 0 || total > MAX_LABELS;
   if (total > MAX_LABELS) el('labels-summary').textContent += ` That is more than ${MAX_LABELS} at once — print in smaller batches.`;
 
   const preview = el('labels-preview');
@@ -5553,6 +5554,231 @@ el('labels-form').addEventListener('submit', (e) => {
     el('print-area').innerHTML = pages.join('');
     document.body.classList.add('printing-labels');
     window.print();
+  });
+});
+
+// ----- QR labels as a downloadable PDF (same A4 sheets as printing) -----
+
+// Sheet layouts in millimetres, matching the print styles.
+const LABEL_PDF_LAYOUT = {
+  std: { top: 15.15, left: 7.2, cols: 3, w: 63.5, h: 38.1, colGap: 2.5, padV: 2.5, padH: 3, gap: 2.5, qr: 30, title: 10, titleLines: 3, sub: 7, brand: 5.5 },
+  lg: { top: 13.1, left: 4.65, cols: 2, w: 99.1, h: 67.7, colGap: 2.5, padV: 4, padH: 5, gap: 4, qr: 52, title: 15, titleLines: 4, sub: 10, brand: 7.5 },
+};
+const PDF_DPI = 300;
+const MM_PX = PDF_DPI / 25.4;
+const PT_PX = PDF_DPI / 72;
+
+// Word-wraps text to a width; very long words are broken; extra lines end in "…".
+function wrapCanvasText(ctx, text, maxWidth, maxLines) {
+  const lines = [];
+  let line = '';
+  const push = (l) => lines.push(l);
+  String(text)
+    .split(/\s+/)
+    .filter(Boolean)
+    .forEach((word) => {
+      const tryLine = line ? `${line} ${word}` : word;
+      if (ctx.measureText(tryLine).width <= maxWidth) {
+        line = tryLine;
+        return;
+      }
+      if (line) push(line);
+      line = '';
+      let rest = word;
+      while (ctx.measureText(rest).width > maxWidth) {
+        let n = rest.length - 1;
+        while (n > 1 && ctx.measureText(rest.slice(0, n)).width > maxWidth) n--;
+        push(rest.slice(0, n));
+        rest = rest.slice(n);
+      }
+      line = rest;
+    });
+  if (line) push(line);
+  if (lines.length <= maxLines) return lines;
+  const kept = lines.slice(0, maxLines);
+  let last = kept[maxLines - 1];
+  while (last && ctx.measureText(`${last}…`).width > maxWidth) last = last.slice(0, -1);
+  kept[maxLines - 1] = `${last}…`;
+  return kept;
+}
+
+function drawQrOnCanvas(ctx, text, x, y, size) {
+  const qr = window.qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const count = qr.getModuleCount();
+  const cells = count + 4; // 2-module quiet zone each side, as on screen
+  const edge = (i) => Math.round(i * (size / cells));
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < count; r++) {
+    for (let c = 0; c < count; c++) {
+      if (!qr.isDark(r, c)) continue;
+      const x0 = x + edge(c + 2);
+      const y0 = y + edge(r + 2);
+      ctx.fillRect(x0, y0, x + edge(c + 3) - x0, y + edge(r + 3) - y0);
+    }
+  }
+}
+
+function drawLabelOnCanvas(ctx, choice, L, x, y) {
+  const px = (mm) => Math.round(mm * MM_PX);
+  const qrSize = px(L.qr);
+  const qrX = x + px(L.padH);
+  drawQrOnCanvas(ctx, choice.url, qrX, y + Math.round((px(L.h) - qrSize) / 2), qrSize);
+
+  const textX = qrX + qrSize + px(L.gap);
+  const textW = x + px(L.w) - px(L.padH) - textX;
+  const font = 'Arial, Helvetica, sans-serif';
+  const blocks = [];
+  ctx.font = `bold ${L.title * PT_PX}px ${font}`;
+  blocks.push({ font: ctx.font, color: '#000', size: L.title * PT_PX, lh: 1.15, lines: wrapCanvasText(ctx, choice.title, textW, L.titleLines) });
+  ctx.font = `${L.sub * PT_PX}px ${font}`;
+  choice.subs.forEach((s) => blocks.push({ font: ctx.font, color: '#000', size: L.sub * PT_PX, lh: 1.2, lines: wrapCanvasText(ctx, s, textW, 2) }));
+  ctx.font = `${L.brand * PT_PX}px ${font}`;
+  blocks.push({ font: ctx.font, color: '#444', size: L.brand * PT_PX, lh: 1.2, lines: wrapCanvasText(ctx, 'VCLG Store Room · scan to open', textW, 2) });
+
+  const blockGap = px(1);
+  const heights = blocks.map((b) => b.lines.length * b.size * b.lh);
+  const total = heights.reduce((s, h) => s + h, 0) + blockGap * (blocks.length - 1);
+  let cy = y + Math.max(px(L.padV), (px(L.h) - total) / 2);
+  ctx.textBaseline = 'top';
+  blocks.forEach((b, i) => {
+    ctx.font = b.font;
+    ctx.fillStyle = b.color;
+    b.lines.forEach((ln, j) => ctx.fillText(ln, textX, cy + j * b.size * b.lh + (b.size * (b.lh - 1)) / 2));
+    cy += heights[i] + blockGap;
+  });
+}
+
+// One A4 page of labels as a 300 dpi greyscale canvas.
+function drawLabelPage(cells, sizeKey) {
+  const L = LABEL_PDF_LAYOUT[sizeKey];
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(210 * MM_PX);
+  canvas.height = Math.round(297 * MM_PX);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  cells.forEach((choice, i) => {
+    const col = i % L.cols;
+    const row = Math.floor(i / L.cols);
+    const x = Math.round((L.left + col * (L.w + L.colGap)) * MM_PX);
+    const y = Math.round((L.top + row * L.h) * MM_PX);
+    drawLabelOnCanvas(ctx, choice, L, x, y);
+  });
+  return canvas;
+}
+
+async function deflateBytes(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function canvasToJpeg(canvas) {
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? b.arrayBuffer().then((a) => resolve(new Uint8Array(a)), reject) : reject(new Error('Could not draw the labels.'))), 'image/jpeg', 0.95)
+  );
+}
+
+// Page image for the PDF: lossless greyscale where the browser can compress,
+// otherwise a high-quality JPEG.
+async function pageImage(canvas) {
+  if (typeof CompressionStream === 'function') {
+    const rgba = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    const grey = new Uint8Array(canvas.width * canvas.height);
+    for (let i = 0, j = 0; j < grey.length; i += 4, j++) grey[j] = rgba[i];
+    return { w: canvas.width, h: canvas.height, filter: 'FlateDecode', colors: 'DeviceGray', bytes: await deflateBytes(grey) };
+  }
+  return { w: canvas.width, h: canvas.height, filter: 'DCTDecode', colors: 'DeviceRGB', bytes: await canvasToJpeg(canvas) };
+}
+
+// Minimal PDF: one full-page image per A4 page (595.28 × 841.89 pt).
+function buildImagePdf(images) {
+  const enc = new TextEncoder();
+  const parts = [];
+  let length = 0;
+  const offsets = [];
+  const add = (p) => {
+    const b = typeof p === 'string' ? enc.encode(p) : p;
+    parts.push(b);
+    length += b.length;
+  };
+  const obj = (n, body) => {
+    offsets[n] = length;
+    add(`${n} 0 obj\n`);
+    body();
+    add('\nendobj\n');
+  };
+  add('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
+  const pageIds = images.map((_, i) => 3 + i * 3);
+  obj(1, () => add('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => add(`<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${images.length} >>`));
+  images.forEach((img, i) => {
+    const pageId = pageIds[i];
+    const content = 'q 595.28 0 0 841.89 0 0 cm /Im0 Do Q';
+    obj(pageId, () =>
+      add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /XObject << /Im0 ${pageId + 2} 0 R >> >> /Contents ${pageId + 1} 0 R >>`)
+    );
+    obj(pageId + 1, () => add(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+    obj(pageId + 2, () => {
+      add(`<< /Type /XObject /Subtype /Image /Width ${img.w} /Height ${img.h} /ColorSpace /${img.colors} /BitsPerComponent 8 /Filter /${img.filter} /Length ${img.bytes.length} >>\nstream\n`);
+      add(img.bytes);
+      add('\nendstream');
+    });
+  });
+  const count = 3 + images.length * 3;
+  const xref = length;
+  let table = `xref\n0 ${count}\n0000000000 65535 f \n`;
+  for (let n = 1; n < count; n++) table += `${String(offsets[n]).padStart(10, '0')} 00000 n \n`;
+  add(table);
+  add(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, { type: 'application/pdf' });
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+el('labels-pdf-btn').addEventListener('click', () => {
+  const btn = el('labels-pdf-btn');
+  withBusy(btn, async () => {
+    setFormError('labels-form-error', '');
+    const picked = pickedChoices();
+    const copies = labelCopies();
+    const sizeKey = LABEL_PDF_LAYOUT[el('labels-size').value] ? el('labels-size').value : 'std';
+    const all = [];
+    picked.forEach((c) => {
+      for (let i = 0; i < copies; i++) all.push(c);
+    });
+    if (all.length === 0) {
+      setFormError('labels-form-error', 'Tick at least one label to download.');
+      return;
+    }
+    if (all.length > MAX_LABELS) {
+      setFormError('labels-form-error', `That is ${all.length} labels — download ${MAX_LABELS} or fewer at a time.`);
+      return;
+    }
+    try {
+      await loadQrLib();
+      const perPage = LABEL_SIZES[sizeKey].perPage;
+      const images = [];
+      for (let i = 0; i < all.length; i += perPage) {
+        images.push(await pageImage(drawLabelPage(all.slice(i, i + perPage), sizeKey)));
+        await new Promise((r) => setTimeout(r, 0)); // keep the page responsive
+      }
+      const kind = labelKind() === 'loc' ? 'shelf' : 'item';
+      saveBlob(buildImagePdf(images), `vclg-store-room-${kind}-qr-labels-${todayStr()}.pdf`);
+      showToast(`PDF downloaded: ${plural(all.length, 'label', 'labels')} on ${plural(images.length, 'page', 'pages')}.`);
+    } catch (err) {
+      setFormError('labels-form-error', err && err.message ? err.message : 'Could not make the PDF.');
+    }
   });
 });
 
